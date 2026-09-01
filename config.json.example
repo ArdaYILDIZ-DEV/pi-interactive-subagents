@@ -1,5 +1,6 @@
 {
   "status": {
-    "enabled": true
+    "enabled": true,
+    "lineLimit": 4
   }
 }

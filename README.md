@@ -14,8 +14,8 @@ result is steered into the main session as a notification that triggers a new tu
 
 ```
 ╭─ Subagents ──────────────────────────── 2 running ─╮
-│ 00:23  scout      active                       │
-│ 00:45  worker     waiting                     │
+│ 23s  scout (scout)                          active │
+│ 1m 23s  dark-mode (worker)                 waiting │
 ╰────────────────────────────────────────────────────╯
 ```
 
@@ -46,7 +46,7 @@ subagent({ agent: "worker", name: "dark-mode", task: "Implement the dark mode to
 | `task` | string | required | Task prompt |
 | `name` | string | agent name | Display name for the pane and widget. Must be unique — duplicates are auto-suffixed (`scout`, `scout-2`, …) |
 | `model` | string | agent's model | Override the model for this spawn |
-| `cwd` | string | agent's `cwd` | Working directory (see Role folders) |
+| `cwd` | string | agent's `cwd` | Working directory for the subagent (defaults to current directory or agent's defined `cwd`) |
 
 ### Messaging
 
@@ -77,8 +77,8 @@ Spawns must name a known agent at **every** depth:
 
 | Agent | Model | Tools | Role |
 | ----- | ----- | ----- | ---- |
-| **scout** | `antigravity/gemini-3.7-flash` | `read`, `grep`, `find`, `ls`, `safe_bash` | Fast read-only codebase recon |
-| **researcher** | `antigravity/gemini-3.7-flash` | `web_search`, `fetch_content`, `get_search_content`, `source_check`, `web_fetch`, `read`, `safe_bash` | Web research, synthesized into a sourced brief |
+| **scout** | `opencode/muse-spark-1.2-contributor-free` | `read`, `grep`, `find`, `ls`, `safe_bash` | Fast read-only codebase recon |
+| **researcher** | `opencode/muse-spark-1.2-contributor-free` | `web_search`, `fetch_content`, `get_search_content`, `source_check`, `web_fetch`, `read`, `safe_bash` | Web research, synthesized into a sourced brief |
 | **worker** | `antigravity/gemini-3.7-flash` | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `fetch_content`, `get_search_content`, `web_fetch`, `source_check`, `todo` + spawning | General implementer; may spawn `scout` and `researcher` |
 
 All three are autonomous (`auto-exit: true`) and carry their identity in the system prompt (`system-prompt: append`).
@@ -124,32 +124,63 @@ The widget tracks each sub-agent from a runtime activity snapshot written by the
 `starting`, `active`, `waiting`, or `stalled` (no valid snapshot for too long).
 
 Status display is configured via `config.json` in the package directory. A `config.json.example`
-is provided; copy it to `config.json` to enable the widget. **If `config.json` is absent,
-the extension falls back to a safe default (`enabled: true`)** rather than failing to load.
+is provided; copy it to `config.json` to customize the widget. **If `config.json` is absent,
+the extension falls back to safe in-code defaults (`enabled: true`, `lineLimit: 4`)** rather than failing to load.
 
 ```json
 {
-  "status": { "enabled": true }
+  "status": {
+    "enabled": true,
+    "lineLimit": 4
+  }
 }
 ```
 
+### Configuration fields
+
+| Field | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `status.enabled` | boolean | `true` | Show or hide the live status widget above the editor |
+| `status.lineLimit` | number | `4` | Maximum number of concurrent subagent status rows rendered |
+
 ## Requirements & Installation
 
-- [pi](https://github.com/badlogic/pi-mono)
-- [tmux](https://github.com/tmux/tmux)
+- [pi](https://github.com/badlogic/pi-mono) (`@earendil-works/pi-coding-agent`)
+- [tmux](https://github.com/tmux/tmux) (2.6+)
 
-### Quick Setup
+### Installation
+
+Pi automatically discovers extensions in `~/.pi/agent/extensions/<package-name>/` via the `"pi": { "extensions": [...] }` manifest in `package.json`.
+
+#### Option A: Clone into extensions directory
 
 ```bash
-# 1. Link extension to global extensions directory
+git clone https://github.com/ArdaYILDIZ-DEV/pi-interactive-subagents.git ~/.pi/agent/extensions/interactive-subagents
+```
+
+#### Option B: Symlink local repository
+
+```bash
 mkdir -p ~/.pi/agent/extensions
-ln -sfn "$(pwd)/pi-extension/subagents" ~/.pi/agent/extensions/subagents
+ln -sfn "$(pwd)" ~/.pi/agent/extensions/interactive-subagents
+```
 
-# 2. Copy bundled agent profiles
-mkdir -p ~/.pi/agent/agents
-cp agents/*.md ~/.pi/agent/agents/
+### Agent Definitions Setup
 
-# 3. Start pi inside tmux
+- **Bundled agents:** Out of the box, `scout`, `researcher`, and `worker` are auto-discovered directly from the extension package's `agents/` directory.
+- **Global customizations:** Place or copy `.md` files in `~/.pi/agent/agents/` to define or customize agents available across all workspaces:
+  ```bash
+  mkdir -p ~/.pi/agent/agents
+  cp agents/*.md ~/.pi/agent/agents/   # optional: override global defaults
+  ```
+- **Project-specific agents:** Place `.md` files in `.pi/agents/` in any project root to define workspace-scoped agents.
+- **Discovery priority:** **`project (.pi/agents/)` > `global (~/.pi/agent/agents/)` > `package-bundled (agents/)`**.
+
+### Usage
+
+Start `pi` inside a tmux session:
+
+```bash
 tmux new -A -s pi 'pi'
 ```
 
