@@ -1,0 +1,31 @@
+{
+  "name": "interactive-subagents",
+  "version": "1.0.0",
+  "description": "Interactive subagents for pi — spawn, orchestrate, resume, and manage sub-agent sessions in tmux",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/unit/*.test.ts",
+    "test:integration": "node --test --test-concurrency=1 test/integration/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./pi-extension/subagents/index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.3",
+    "@earendil-works/pi-tui": "^0.84.3",
+    "@sinclair/typebox": "^0.34.49",
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2"
+  }
+}
