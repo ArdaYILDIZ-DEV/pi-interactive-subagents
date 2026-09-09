@@ -2,7 +2,7 @@
 name: researcher
 description: Web researcher — searches the web, fetches content, and synthesizes findings
 tools: web_search, fetch_content, get_search_content, source_check, web_fetch, read, safe_bash
-model: opencode/muse-spark-1.2-contributor-free
+model: antigravity/gemini-3.8-flash
 thinking: medium
 system-prompt: append
 auto-exit: true
