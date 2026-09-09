@@ -14,6 +14,7 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { writeFileSync } from "node:fs";
 import { createSubagentActivityRecorder } from "./activity.ts";
+import { runningChildrenCount } from "./registry.ts";
 import { parseEnvInt } from "./env.ts";
 import type {
   AskSidecarPayload,
@@ -28,18 +29,7 @@ export interface AssistantMessageLike {
 }
 
 /** Returns the count of active child subagents spawned by this session. */
-export function runningChildrenCount(): number {
-  const symbolKey = Symbol.for("pi-subagents/running-children-count");
-  const registry = globalThis as unknown as Record<symbol, unknown>;
-  const fn = registry[symbolKey];
-  if (typeof fn !== "function") return 0;
-  try {
-    const n = (fn as () => unknown)();
-    return typeof n === "number" && n > 0 ? n : 0;
-  } catch {
-    return 0;
-  }
-}
+export { runningChildrenCount } from "./registry.ts";
 
 function parseDeniedTools(rawValue: string | undefined): string[] {
   return (rawValue ?? "")
