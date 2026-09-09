@@ -28,6 +28,11 @@ function hasCommand(command: string): boolean {
   return available;
 }
 
+/** Test-only reset so command-availability results never leak between test cases. */
+export function clearCommandAvailabilityCache(): void {
+  commandAvailability.clear();
+}
+
 /** Returns true when the TMUX environment variable is set and the tmux binary is on PATH. */
 export function isMuxAvailable(): boolean {
   return !!process.env.TMUX && hasCommand("tmux");
@@ -230,7 +235,11 @@ export function interpretExitSidecar(data: unknown): PollResult {
   return { reason: "done", exitCode: 0 };
 }
 
-export const __test__ = { interpretExitSidecar, hasCommand };
+export const __test__ = {
+  interpretExitSidecar,
+  hasCommand,
+  clearCache: clearCommandAvailabilityCache,
+};
 
 function checkSessionSidecars(sessionFile: string): PollResult | null {
   try {
