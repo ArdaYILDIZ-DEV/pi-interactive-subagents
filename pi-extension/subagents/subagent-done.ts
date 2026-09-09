@@ -153,7 +153,7 @@ export default function (pi: ExtensionAPI) {
     const envVal = process.env.PI_SUBAGENT_AUTO_EXIT;
     if (envVal === "0" || envVal === "false") return false;
     if (envVal === "1" || envVal === "true") return true;
-    return !!process.env.PI_SUBAGENT_SESSION;
+    return Boolean(process.env.PI_SUBAGENT_SESSION);
   }
 
   function handleExit(
@@ -181,13 +181,17 @@ export default function (pi: ExtensionAPI) {
     stopHeartbeat();
     try {
       ctx.shutdown();
-    } catch {}
+    } catch {
+      // Shutdown is best-effort during exit; the fallback timer below still runs.
+    }
     // ctx.shutdown() may return before the process has fully wound down;
     // the timer guarantees the shell prompt returns in the tmux pane.
     setTimeout(() => {
       try {
         process.exit(0);
-      } catch {}
+      } catch {
+        // process.exit cannot usefully fail here; pane teardown proceeds regardless.
+      }
     }, 100);
   }
 
@@ -239,6 +243,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", (event, ctx) => {
+    // SAFETY: pi event payloads are untyped at the boundary; narrowed by downstream property checks.
     const messages = event.messages as unknown as
       | readonly AssistantMessageLike[]
       | undefined;

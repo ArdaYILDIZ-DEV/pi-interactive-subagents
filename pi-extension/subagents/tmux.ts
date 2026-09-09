@@ -6,7 +6,13 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -15,11 +21,14 @@ const execFileAsync = promisify(execFile);
 const commandAvailability = new Map<string, boolean>();
 
 function hasCommand(command: string): boolean {
-  if (commandAvailability.has(command)) return commandAvailability.get(command)!;
+  if (commandAvailability.has(command))
+    return commandAvailability.get(command)!;
   let available = false;
   try {
     // Pass command as $1 argument to avoid shell metacharacter injection.
-    execFileSync("sh", ["-c", 'command -v "$1"', "sh", command], { stdio: "ignore" });
+    execFileSync("sh", ["-c", 'command -v "$1"', "sh", command], {
+      stdio: "ignore",
+    });
     available = true;
   } catch {
     available = false;
@@ -65,9 +74,13 @@ function rebalanceSurfaces(hintPane?: string): void {
   rebalanceTimer = setTimeout(() => {
     rebalanceTimer = null;
     try {
-      execFileSync("tmux", ["select-layout", "-t", target, SUBAGENT_TMUX_LAYOUT], {
-        encoding: "utf8",
-      });
+      execFileSync(
+        "tmux",
+        ["select-layout", "-t", target, SUBAGENT_TMUX_LAYOUT],
+        {
+          encoding: "utf8",
+        },
+      );
     } catch {
       // Pane may have closed between the timer firing and the command executing.
     }
@@ -98,10 +111,13 @@ export function createSurfaceSplit(
   if (fromSurface) args.push("-t", fromSurface);
   args.push("-P", "-F", "#{pane_id}");
   const pane = execFileSync("tmux", args, { encoding: "utf8" }).trim();
-  if (!pane.startsWith("%")) throw new Error(`Unexpected tmux split-window output: ${pane}`);
+  if (!pane.startsWith("%"))
+    throw new Error(`Unexpected tmux split-window output: ${pane}`);
   // Set a descriptive title so the pane is identifiable in the terminal.
   try {
-    execFileSync("tmux", ["select-pane", "-t", pane, "-T", name], { encoding: "utf8" });
+    execFileSync("tmux", ["select-pane", "-t", pane, "-T", name], {
+      encoding: "utf8",
+    });
   } catch {
     // Non-fatal: title setting may fail in environments that restrict pane rename.
   }
@@ -112,8 +128,12 @@ export function createSurfaceSplit(
 /** Sends raw keystrokes to a pane and executes them with Enter. */
 export function sendCommand(surface: string, command: string): void {
   requireTmux();
-  execFileSync("tmux", ["send-keys", "-t", surface, "-l", command], { encoding: "utf8" });
-  execFileSync("tmux", ["send-keys", "-t", surface, "Enter"], { encoding: "utf8" });
+  execFileSync("tmux", ["send-keys", "-t", surface, "-l", command], {
+    encoding: "utf8",
+  });
+  execFileSync("tmux", ["send-keys", "-t", surface, "Enter"], {
+    encoding: "utf8",
+  });
 }
 
 /**
@@ -129,10 +149,14 @@ export function sendLongCommand(
   mkdirSync(scriptDir, { recursive: true, mode: 0o700 });
   const scriptPath =
     options?.scriptPath ??
-    join(scriptDir, `cmd-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.sh`);
+    join(
+      scriptDir,
+      `cmd-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.sh`,
+    );
   mkdirSync(dirname(scriptPath), { recursive: true, mode: 0o700 });
   const scriptParts = ["#!/bin/bash"];
-  if (options?.scriptPreamble) scriptParts.push(options.scriptPreamble.trimEnd());
+  if (options?.scriptPreamble)
+    scriptParts.push(options.scriptPreamble.trimEnd());
   scriptParts.push(command);
   writeFileSync(scriptPath, scriptParts.join("\n") + "\n", { mode: 0o700 });
   sendCommand(surface, `bash ${shellEscape(scriptPath)}; exit`);
@@ -148,7 +172,10 @@ export function readScreen(surface: string, lines = 50): string {
   );
 }
 
-export async function readScreenAsync(surface: string, lines = 50): Promise<string> {
+export async function readScreenAsync(
+  surface: string,
+  lines = 50,
+): Promise<string> {
   requireTmux();
   const { stdout } = await execFileAsync(
     "tmux",
@@ -161,11 +188,18 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
 export function isPaneAlive(surface: string): boolean {
   if (!isMuxAvailable()) return false;
   try {
-    const panes = execFileSync("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return panes.split("\n").map((p) => p.trim()).includes(surface);
+    const panes = execFileSync(
+      "tmux",
+      ["list-panes", "-a", "-F", "#{pane_id}"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    return panes
+      .split("\n")
+      .map((p) => p.trim())
+      .includes(surface);
   } catch {
     return false;
   }
@@ -174,10 +208,17 @@ export function isPaneAlive(surface: string): boolean {
 export async function isPaneAliveAsync(surface: string): Promise<boolean> {
   if (!isMuxAvailable()) return false;
   try {
-    const { stdout } = await execFileAsync("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], {
-      encoding: "utf8",
-    });
-    return stdout.split("\n").map((p) => p.trim()).includes(surface);
+    const { stdout } = await execFileAsync(
+      "tmux",
+      ["list-panes", "-a", "-F", "#{pane_id}"],
+      {
+        encoding: "utf8",
+      },
+    );
+    return stdout
+      .split("\n")
+      .map((p) => p.trim())
+      .includes(surface);
   } catch {
     return false;
   }
@@ -210,7 +251,10 @@ export interface AskSidecarPayload {
   question: string;
 }
 
-export type SubagentSidecarPayload = DoneSidecarPayload | ExitSidecarPayload | AskSidecarPayload;
+export type SubagentSidecarPayload =
+  | DoneSidecarPayload
+  | ExitSidecarPayload
+  | AskSidecarPayload;
 
 export interface PollResult {
   reason: "done" | "sentinel" | "error";
@@ -227,7 +271,8 @@ export function interpretExitSidecar(data: unknown): PollResult {
   ) {
     const errorData = data as Partial<ExitSidecarPayload>;
     const errorMessage =
-      typeof errorData.errorMessage === "string" && errorData.errorMessage.trim() !== ""
+      typeof errorData.errorMessage === "string" &&
+      errorData.errorMessage.trim() !== ""
         ? errorData.errorMessage
         : "Subagent exited with stopReason=error (no errorMessage in sidecar).";
     return { reason: "error", exitCode: 1, errorMessage };
@@ -314,7 +359,11 @@ export async function pollForExit(
     } catch (err: unknown) {
       // tmux errors here mean the pane is gone; treat as a clean exit.
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("can't find pane") || msg.includes("no server running") || !(await isPaneAliveAsync(surface))) {
+      if (
+        msg.includes("can't find pane") ||
+        msg.includes("no server running") ||
+        !(await isPaneAliveAsync(surface))
+      ) {
         return { reason: "done", exitCode: 0 };
       }
     }
