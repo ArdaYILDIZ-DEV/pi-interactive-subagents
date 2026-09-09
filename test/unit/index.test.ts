@@ -25,8 +25,10 @@ import {
   borderTop,
   borderBottom,
   resolveResultPresentation,
+  statusLabelFor,
   type SubagentResult,
 } from "../../pi-extension/subagents/index.ts";
+import { loadStatusConfig } from "../../pi-extension/subagents/status.ts";
 import { sanitizeSubagentName } from "../../pi-extension/subagents/sandbox.ts";
 import type { SubagentLoadout } from "../../pi-extension/subagents/session.ts";
 
@@ -347,6 +349,70 @@ You are a test agent. Always verify.`;
       assert.equal(borderTop("T", "I", 0), "");
       assert.equal(borderLine("L", "R", 0), "");
       assert.equal(borderBottom(0), "");
+    });
+  });
+
+  describe("statusLabelFor equivalence and custom threshold", () => {
+    it("returns identical labels with explicit and default threshold for fresh and stale samples", () => {
+      const statusConfig = loadStatusConfig();
+      const now = 1_000_000;
+
+      const freshActive = {
+        version: 1 as const,
+        runningChildId: "child-1",
+        latestEvent: "tool-call",
+        phase: "active" as const,
+        updatedAt: now - 5_000,
+      };
+      assert.equal(
+        statusLabelFor(freshActive, now - 10_000, now, statusConfig.stallAfterMs),
+        statusLabelFor(freshActive, now - 10_000, now),
+      );
+      assert.equal(
+        statusLabelFor(freshActive, now - 10_000, now, statusConfig.stallAfterMs),
+        "active",
+      );
+
+      const stale = {
+        version: 1 as const,
+        runningChildId: "child-2",
+        latestEvent: "tool-call",
+        phase: "active" as const,
+        updatedAt: now - (statusConfig.stallAfterMs + 10_000),
+      };
+      assert.equal(
+        statusLabelFor(stale, now - (statusConfig.stallAfterMs + 20_000), now, statusConfig.stallAfterMs),
+        statusLabelFor(stale, now - (statusConfig.stallAfterMs + 20_000), now),
+      );
+      assert.equal(
+        statusLabelFor(stale, now - (statusConfig.stallAfterMs + 20_000), now, statusConfig.stallAfterMs),
+        "stalled",
+      );
+    });
+
+    it("flips borderline sample with custom threshold (120s silence active by default, stalled at 60s)", () => {
+      const statusConfig = loadStatusConfig();
+      const now = 1_000_000;
+
+      const borderline = {
+        version: 1 as const,
+        runningChildId: "child-3",
+        latestEvent: "tool-call",
+        phase: "active" as const,
+        updatedAt: now - 120_000,
+      };
+      assert.equal(
+        statusLabelFor(borderline, now - 150_000, now, statusConfig.stallAfterMs),
+        statusLabelFor(borderline, now - 150_000, now),
+      );
+      assert.equal(
+        statusLabelFor(borderline, now - 150_000, now, statusConfig.stallAfterMs),
+        "active",
+      );
+      assert.equal(
+        statusLabelFor(borderline, now - 150_000, now, 60_000),
+        "stalled",
+      );
     });
   });
 });

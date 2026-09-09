@@ -8,6 +8,7 @@ import {
   classifyActivity,
   DEFAULT_STATUS_CONFIG,
   DEFAULT_STALL_AFTER_MS,
+  sanitizeStallThreshold,
 } from "../../pi-extension/subagents/status.ts";
 
 function tmp(): string {
@@ -154,6 +155,95 @@ describe("status.ts", () => {
       ).kind,
       "stalled",
     );
+  });
+
+  describe("sanitizeStallThreshold", () => {
+    it("returns floored positive finite numbers", () => {
+      assert.equal(sanitizeStallThreshold(60_000), 60_000);
+      assert.equal(sanitizeStallThreshold(30_000.9), 30_000);
+      assert.equal(sanitizeStallThreshold(1e12), 1e12);
+      assert.equal(sanitizeStallThreshold(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
+    });
+
+    it("falls back to DEFAULT_STALL_AFTER_MS for non-positive or non-finite numbers", () => {
+      assert.equal(sanitizeStallThreshold(0), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold(-1), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold(-5000), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold(NaN), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold(Infinity), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold(-Infinity), DEFAULT_STALL_AFTER_MS);
+    });
+
+    it("falls back to DEFAULT_STALL_AFTER_MS for non-number inputs", () => {
+      assert.equal(sanitizeStallThreshold("not-a-number"), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold("180000"), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold(null), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold(undefined), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold({}), DEFAULT_STALL_AFTER_MS);
+      assert.equal(sanitizeStallThreshold(true), DEFAULT_STALL_AFTER_MS);
+    });
+  });
+
+  describe("parseConfig stallAfterMs edge cases", () => {
+    it("handles valid and invalid stallAfterMs in config", () => {
+      const d = tmp();
+      const testCases: Array<{ input: unknown; expected: number }> = [
+        { input: 30000.9, expected: 30000 },
+        { input: 1e12, expected: 1e12 },
+        { input: 0, expected: DEFAULT_STALL_AFTER_MS },
+        { input: -10, expected: DEFAULT_STALL_AFTER_MS },
+        { input: "invalid", expected: DEFAULT_STALL_AFTER_MS },
+        { input: null, expected: DEFAULT_STALL_AFTER_MS },
+      ];
+
+      for (const tc of testCases) {
+        writeFileSync(
+          join(d, "config.json"),
+          JSON.stringify({ status: { enabled: true, stallAfterMs: tc.input } }),
+        );
+        const cfg = loadStatusConfig(
+          join(d, "config.json"),
+          join(d, "config.json.example"),
+        );
+        assert.equal(cfg.stallAfterMs, tc.expected);
+      }
+      rmSync(d, { recursive: true, force: true });
+    });
+  });
+
+  describe("classifyActivity invalid threshold fallback", () => {
+    it("falls back to default threshold when stallAfterMs is invalid", () => {
+      const now = 1_000_000;
+      // 120s of silence is within DEFAULT_STALL_AFTER_MS (180s)
+      const invalidThresholds = [NaN, 0, -1, -50_000, "invalid" as unknown as number];
+
+      for (const invalid of invalidThresholds) {
+        assert.equal(
+          classifyActivity(
+            { ok: true, phase: "active", updatedAt: now - 120_000 },
+            now,
+            invalid,
+          ).kind,
+          "active",
+        );
+        assert.equal(
+          classifyActivity(
+            { ok: true, phase: "active", updatedAt: now - 200_000 },
+            now,
+            invalid,
+          ).kind,
+          "stalled",
+        );
+        assert.equal(
+          classifyActivity(
+            { ok: false, phase: "missing", updatedAt: now - 120_000 },
+            now,
+            invalid,
+          ).kind,
+          "starting",
+        );
+      }
+    });
   });
 
   it("existsSync import works (sanity for dependency-free module)", () => {

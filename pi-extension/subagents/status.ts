@@ -22,13 +22,23 @@ const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const DEFAULT_CONFIG_PATH = join(PACKAGE_ROOT, "config.json");
 const EXAMPLE_CONFIG_PATH = join(PACKAGE_ROOT, "config.json.example");
 
+export const DEFAULT_STALL_AFTER_MS = 180_000;
+
 export const DEFAULT_STATUS_CONFIG: StatusConfig = {
   enabled: true,
   lineLimit: 4,
-  stallAfterMs: 180_000,
+  stallAfterMs: DEFAULT_STALL_AFTER_MS,
 };
 
-export const DEFAULT_STALL_AFTER_MS = 180_000;
+/**
+ * Sanitizes and validates a stall threshold value in milliseconds.
+ * Returns the floored positive finite number, or the default threshold fallback.
+ */
+export function sanitizeStallThreshold(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : DEFAULT_STALL_AFTER_MS;
+}
 
 function readJson(path: string): unknown | null {
   if (typeof path !== "string" || path.includes("\0")) return null;
@@ -58,12 +68,7 @@ function parseConfig(raw: unknown): StatusConfig {
     s.lineLimit > 0
       ? Math.floor(s.lineLimit)
       : DEFAULT_STATUS_CONFIG.lineLimit;
-  const stallAfterMs =
-    typeof s.stallAfterMs === "number" &&
-    Number.isFinite(s.stallAfterMs) &&
-    s.stallAfterMs > 0
-      ? Math.floor(s.stallAfterMs)
-      : DEFAULT_STATUS_CONFIG.stallAfterMs;
+  const stallAfterMs = sanitizeStallThreshold(s.stallAfterMs);
   return { enabled: s.enabled, lineLimit, stallAfterMs };
 }
 
@@ -116,10 +121,7 @@ export function classifyActivity(
 } {
   const elapsedMs = now - view.updatedAt;
   const elapsedText = formatDuration(elapsedMs);
-  const threshold =
-    Number.isFinite(stallAfterMs) && stallAfterMs > 0
-      ? stallAfterMs
-      : DEFAULT_STALL_AFTER_MS;
+  const threshold = sanitizeStallThreshold(stallAfterMs);
 
   // Unreported activity is classified as starting if recent, or stalled if overdue.
   if (!view.ok) {

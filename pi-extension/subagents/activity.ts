@@ -25,6 +25,7 @@ export interface SubagentActivityRecorder {
   agentStart(): void;
   agentEndWaiting(): void;
   agentEndDone(): void;
+  turnStart(): void;
   toolStart(): void;
   toolEnd(): void;
   askQuestion(): void;
@@ -72,6 +73,7 @@ function noopRecorder(): SubagentActivityRecorder {
     agentStart() {},
     agentEndWaiting() {},
     agentEndDone() {},
+    turnStart() {},
     toolStart() {},
     toolEnd() {},
     askQuestion() {},
@@ -166,6 +168,9 @@ export function createSubagentActivityRecorder(params: {
     agentEndDone() {
       record("done", "agent_end", "immediate");
       disabled = true;
+    },
+    turnStart() {
+      record("active", "turn_start", "throttled");
     },
     toolStart() {
       record("active", "tool_execution_start", "throttled");

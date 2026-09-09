@@ -69,6 +69,7 @@ import {
   applySandboxToParts,
   sanitizeSubagentName,
 } from "./sandbox.ts";
+import { parseEnvInt } from "./env.ts";
 
 const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 const SUBAGENT_DONE_PATH = join(SUBAGENTS_DIR, "subagent-done.ts");
@@ -611,9 +612,7 @@ export function formatElapsed(seconds: number): string {
 }
 
 function getShellReadyDelayMs(): number {
-  const raw = process.env.PI_SUBAGENT_SHELL_READY_DELAY_MS?.trim();
-  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 500;
+  return parseEnvInt(process.env.PI_SUBAGENT_SHELL_READY_DELAY_MS, 500, 0);
 }
 
 /**
@@ -621,9 +620,7 @@ function getShellReadyDelayMs(): number {
  * Prevents indefinite polling when a pane exits unexpectedly.
  */
 function getWatchTimeoutMs(): number {
-  const raw = process.env.PI_SUBAGENT_WATCH_TIMEOUT_MS?.trim();
-  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  return parseEnvInt(process.env.PI_SUBAGENT_WATCH_TIMEOUT_MS, 0, 1);
 }
 
 // ── Widget ──
@@ -691,7 +688,7 @@ export function renderSubagentWidgetLines(
   const now = Date.now();
   for (const agent of agents) {
     const elapsed = formatElapsed(Math.floor((now - agent.startTime) / 1000));
-    const kind = statusLabelFor(agent.activity ?? null, agent.startTime, now);
+    const kind = statusLabelFor(agent.activity ?? null, agent.startTime, now, statusConfig.stallAfterMs);
     const left = ` ${elapsed}  ${agent.name}${agent.agent ? ` (${agent.agent})` : ""} `;
     const right = statusConfig.enabled ? ` ${kind} ` : " running… ";
     lines.push(borderLine(left, right, width));

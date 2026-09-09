@@ -80,4 +80,29 @@ describe("activity.ts", () => {
     assert.ok(raw.includes('"runningChildId":"c2"'));
     rmSync(d, { recursive: true, force: true });
   });
+
+  it("turnStart transitions from waiting to active with latestEvent and refreshed updatedAt", () => {
+    const d = mkdtempSync(join(tmpdir(), "iss-activity-ts-"));
+    const file = getSubagentActivityFile(d, "child-ts");
+    let now = 1000;
+    const recorder = createSubagentActivityRecorder({
+      runningChildId: "child-ts",
+      activityFile: file,
+      now: () => now,
+    });
+    recorder.sessionStart();
+    recorder.agentEndWaiting();
+
+    now = 5000;
+    recorder.turnStart();
+
+    const view = readSubagentActivityFile(file, "child-ts");
+    assert.ok(view.ok);
+    if (view.ok) {
+      assert.equal(view.activity.phase, "active");
+      assert.equal(view.activity.latestEvent, "turn_start");
+      assert.equal(view.activity.updatedAt, 5000);
+    }
+    rmSync(d, { recursive: true, force: true });
+  });
 });

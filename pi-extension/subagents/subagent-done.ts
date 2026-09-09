@@ -14,6 +14,7 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { writeFileSync } from "node:fs";
 import { createSubagentActivityRecorder } from "./activity.ts";
+import { parseEnvInt } from "./env.ts";
 import type {
   AskSidecarPayload,
   DoneSidecarPayload,
@@ -140,9 +141,7 @@ export default function (pi: ExtensionAPI) {
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   function getHeartbeatIntervalMs(): number {
-    const raw = process.env.PI_SUBAGENT_HEARTBEAT_MS?.trim();
-    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+    return parseEnvInt(process.env.PI_SUBAGENT_HEARTBEAT_MS, 15_000, 1);
   }
 
   function stopHeartbeat(): void {
@@ -157,13 +156,7 @@ export default function (pi: ExtensionAPI) {
     heartbeatTimer = setInterval(() => {
       recorder.heartbeat();
     }, getHeartbeatIntervalMs());
-    if (
-      typeof heartbeatTimer === "object" &&
-      heartbeatTimer !== null &&
-      "unref" in heartbeatTimer
-    ) {
-      heartbeatTimer.unref();
-    }
+    heartbeatTimer.unref?.();
   }
 
   function shouldAutoExit(): boolean {
@@ -248,7 +241,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("turn_start", () => {
-    recorder.toolStart();
+    recorder.turnStart();
   });
 
   pi.on("session_shutdown", () => {
