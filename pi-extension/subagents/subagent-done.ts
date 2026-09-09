@@ -4,7 +4,10 @@
  * Manages tool status display, orchestrator communication (`ask_question`),
  * and automated exit handling upon task completion or error.
  */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { Box, Text } from "@earendil-works/pi-tui";
@@ -44,7 +47,10 @@ function parseDeniedTools(rawValue: string | undefined): string[] {
     .filter(Boolean);
 }
 
-function writeExitSidecar(sessionFile: string, errorInfo: { errorMessage: string } | null): void {
+function writeExitSidecar(
+  sessionFile: string,
+  errorInfo: { errorMessage: string } | null,
+): void {
   try {
     if (errorInfo) {
       const exitPayload: ExitSidecarPayload = {
@@ -81,22 +87,45 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setWidget(
       "subagent-tools",
       (_tui: TUI, theme: Theme) => {
-        const box = new Box(1, 0, (text: string) => theme.bg("toolSuccessBg", text));
+        const box = new Box(1, 0, (text: string) =>
+          theme.bg("toolSuccessBg", text),
+        );
         const label = subagentAgent || subagentName;
-        const agentTag = label ? theme.bold(theme.fg("accent", `[${label}]`)) : "";
+        const agentTag = label
+          ? theme.bold(theme.fg("accent", `[${label}]`))
+          : "";
         if (expanded) {
           const countInfo = theme.fg("dim", ` — ${toolNames.length} available`);
           const hint = theme.fg("muted", "  (Ctrl+Alt+O to collapse)");
-          const toolList = toolNames.map((name: string) => theme.fg("dim", name)).join(theme.fg("muted", ", "));
-          const deniedLine = denied.length > 0
-            ? "\n" + theme.fg("muted", "denied: ") + denied.map((n: string) => theme.fg("error", n)).join(theme.fg("muted", ", "))
-            : "";
-          box.addChild(new Text(`${agentTag}${countInfo}${hint}\n${toolList}${deniedLine}`, 0, 0));
+          const toolList = toolNames
+            .map((name: string) => theme.fg("dim", name))
+            .join(theme.fg("muted", ", "));
+          const deniedLine =
+            denied.length > 0
+              ? "\n" +
+                theme.fg("muted", "denied: ") +
+                denied
+                  .map((n: string) => theme.fg("error", n))
+                  .join(theme.fg("muted", ", "))
+              : "";
+          box.addChild(
+            new Text(
+              `${agentTag}${countInfo}${hint}\n${toolList}${deniedLine}`,
+              0,
+              0,
+            ),
+          );
         } else {
           const countInfo = theme.fg("dim", ` — ${toolNames.length} tools`);
-          const deniedInfo = denied.length > 0 ? theme.fg("dim", " · ") + theme.fg("error", `${denied.length} denied`) : "";
+          const deniedInfo =
+            denied.length > 0
+              ? theme.fg("dim", " · ") +
+                theme.fg("error", `${denied.length} denied`)
+              : "";
           const hint = theme.fg("muted", "  (Ctrl+Alt+O to expand)");
-          box.addChild(new Text(`${agentTag}${countInfo}${deniedInfo}${hint}`, 0, 0));
+          box.addChild(
+            new Text(`${agentTag}${countInfo}${deniedInfo}${hint}`, 0, 0),
+          );
         }
         return box;
       },
@@ -108,6 +137,34 @@ export default function (pi: ExtensionAPI) {
   let awaitingAnswer = false;
   let isExiting = false;
   let lastSeenMessages: readonly AssistantMessageLike[] | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  function getHeartbeatIntervalMs(): number {
+    const raw = process.env.PI_SUBAGENT_HEARTBEAT_MS?.trim();
+    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+  }
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
+  function startHeartbeat(): void {
+    if (heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+      recorder.heartbeat();
+    }, getHeartbeatIntervalMs());
+    if (
+      typeof heartbeatTimer === "object" &&
+      heartbeatTimer !== null &&
+      "unref" in heartbeatTimer
+    ) {
+      heartbeatTimer.unref();
+    }
+  }
 
   function shouldAutoExit(): boolean {
     const envVal = process.env.PI_SUBAGENT_AUTO_EXIT;
@@ -116,10 +173,17 @@ export default function (pi: ExtensionAPI) {
     return !!process.env.PI_SUBAGENT_SESSION;
   }
 
-  function handleExit(messages: readonly AssistantMessageLike[] | undefined, ctx: ExtensionContext) {
+  function handleExit(
+    messages: readonly AssistantMessageLike[] | undefined,
+    ctx: ExtensionContext,
+  ) {
     if (isExiting || awaitingAnswer) return;
 
-    if (runningChildrenCount() > 0 || !shouldAutoExit() || !shouldAutoExitOnAgentEnd(messages)) {
+    if (
+      runningChildrenCount() > 0 ||
+      !shouldAutoExit() ||
+      !shouldAutoExitOnAgentEnd(messages)
+    ) {
       recorder.agentEndWaiting();
       return;
     }
@@ -131,6 +195,7 @@ export default function (pi: ExtensionAPI) {
       writeExitSidecar(sessionFile, errorInfo);
     }
     recorder.agentEndDone();
+    stopHeartbeat();
     try {
       ctx.shutdown();
     } catch {}
@@ -145,7 +210,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     recorder.sessionStart();
-    toolNames = pi.getAllTools().map((t) => t.name).sort();
+    startHeartbeat();
+    toolNames = pi
+      .getAllTools()
+      .map((t) => t.name)
+      .sort();
     denied = parseDeniedTools(process.env.PI_DENY_TOOLS);
     renderWidget(ctx);
   });
@@ -159,10 +228,37 @@ export default function (pi: ExtensionAPI) {
     agentStarted = true;
     awaitingAnswer = false;
     recorder.agentStart();
+    startHeartbeat();
+  });
+
+  pi.on("tool_execution_start", () => {
+    recorder.toolStart();
+  });
+
+  pi.on("tool_execution_update", () => {
+    recorder.toolStart();
+  });
+
+  pi.on("tool_execution_end", () => {
+    recorder.toolEnd();
+  });
+
+  pi.on("message_update", () => {
+    recorder.heartbeat();
+  });
+
+  pi.on("turn_start", () => {
+    recorder.toolStart();
+  });
+
+  pi.on("session_shutdown", () => {
+    stopHeartbeat();
   });
 
   pi.on("agent_end", (event, ctx) => {
-    const messages = event.messages as unknown as readonly AssistantMessageLike[] | undefined;
+    const messages = event.messages as unknown as
+      | readonly AssistantMessageLike[]
+      | undefined;
     lastSeenMessages = messages;
     handleExit(messages, ctx);
   });
@@ -188,12 +284,16 @@ export default function (pi: ExtensionAPI) {
       "Ask the orchestrator a single question and pause until they reply. Your session stays open; the answer " +
       "arrives as your next message. Ask exactly one question per call.",
     parameters: Type.Object({
-      question: Type.String({ description: "The single freeform question to ask the orchestrator." }),
+      question: Type.String({
+        description: "The single freeform question to ask the orchestrator.",
+      }),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const sessionFile = process.env.PI_SUBAGENT_SESSION;
       if (!sessionFile) {
-        throw new Error("ask_question is only available in subagent contexts (PI_SUBAGENT_SESSION not set).");
+        throw new Error(
+          "ask_question is only available in subagent contexts (PI_SUBAGENT_SESSION not set).",
+        );
       }
       awaitingAnswer = true;
       recorder.askQuestion();
@@ -208,7 +308,12 @@ export default function (pi: ExtensionAPI) {
         // Ignore errors if the orchestrator directory is unreachable.
       }
       return {
-        content: [{ type: "text" as const, text: "Question sent to the orchestrator. Stop here and wait — their reply will arrive as your next message." }],
+        content: [
+          {
+            type: "text" as const,
+            text: "Question sent to the orchestrator. Stop here and wait — their reply will arrive as your next message.",
+          },
+        ],
         details: { question: params.question },
       };
     },
@@ -219,11 +324,18 @@ export default function (pi: ExtensionAPI) {
  * Determines whether the subagent should automatically terminate after the latest turn.
  * Turns aborted by user intervention remain open; completed turns exit.
  */
-function shouldAutoExitOnAgentEnd(messages: readonly (AssistantMessageLike | unknown)[] | undefined): boolean {
+function shouldAutoExitOnAgentEnd(
+  messages: readonly (AssistantMessageLike | unknown)[] | undefined,
+): boolean {
   if (messages) {
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
-      if (typeof msg === "object" && msg !== null && "role" in msg && (msg as AssistantMessageLike).role === "assistant") {
+      if (
+        typeof msg === "object" &&
+        msg !== null &&
+        "role" in msg &&
+        (msg as AssistantMessageLike).role === "assistant"
+      ) {
         return (msg as AssistantMessageLike).stopReason !== "aborted";
       }
     }
@@ -234,7 +346,9 @@ function shouldAutoExitOnAgentEnd(messages: readonly (AssistantMessageLike | unk
 /**
  * Extracts error details from the final assistant message when an unrecoverable failure occurs.
  */
-function findLatestAssistantError(messages: readonly (AssistantMessageLike | unknown)[] | undefined): { errorMessage: string } | null {
+function findLatestAssistantError(
+  messages: readonly (AssistantMessageLike | unknown)[] | undefined,
+): { errorMessage: string } | null {
   if (!messages) return null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -242,8 +356,15 @@ function findLatestAssistantError(messages: readonly (AssistantMessageLike | unk
     const asAssistant = msg as AssistantMessageLike;
     if (asAssistant.role !== "assistant") continue;
     if (asAssistant.stopReason !== "error") return null;
-    const raw = typeof asAssistant.errorMessage === "string" ? asAssistant.errorMessage.trim() : "";
-    return { errorMessage: raw || "Subagent agent loop ended with stopReason=error (no errorMessage field)." };
+    const raw =
+      typeof asAssistant.errorMessage === "string"
+        ? asAssistant.errorMessage.trim()
+        : "";
+    return {
+      errorMessage:
+        raw ||
+        "Subagent agent loop ended with stopReason=error (no errorMessage field).",
+    };
   }
   return null;
 }

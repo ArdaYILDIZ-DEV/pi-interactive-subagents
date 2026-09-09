@@ -3,12 +3,7 @@
  *
  * Emits throttled state writes to an activity file consumed by the parent status supervisor.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export type ActivityPhase = "starting" | "active" | "waiting" | "done";
@@ -34,6 +29,7 @@ export interface SubagentActivityRecorder {
   toolEnd(): void;
   askQuestion(): void;
   waiting(): void;
+  heartbeat(): void;
 }
 
 /** Minimum ms between successive disk writes; prevents thrashing during rapid tool loops. */
@@ -41,7 +37,10 @@ const FLUSH_THROTTLE_MS = 300;
 /** Disable writes permanently after this many consecutive I/O failures. */
 const MAX_WRITE_FAILURES = 3;
 
-export function getSubagentActivityFile(artifactDir: string, runningChildId: string): string {
+export function getSubagentActivityFile(
+  artifactDir: string,
+  runningChildId: string,
+): string {
   return join(artifactDir, "subagent-activity", `${runningChildId}.json`);
 }
 
@@ -51,7 +50,9 @@ export function readSubagentActivityFile(
 ): ActivityReadResult {
   if (!existsSync(activityFile)) return { ok: false, phase: "missing" };
   try {
-    const parsed = JSON.parse(readFileSync(activityFile, "utf8")) as SubagentActivityState;
+    const parsed = JSON.parse(
+      readFileSync(activityFile, "utf8"),
+    ) as SubagentActivityState;
     if (parsed.version !== 1 || typeof parsed.updatedAt !== "number") {
       return { ok: false, phase: "missing" };
     }
@@ -75,6 +76,7 @@ function noopRecorder(): SubagentActivityRecorder {
     toolEnd() {},
     askQuestion() {},
     waiting() {},
+    heartbeat() {},
   };
 }
 
@@ -137,7 +139,11 @@ export function createSubagentActivityRecorder(params: {
     }, remaining);
   }
 
-  function record(phase: ActivityPhase, event: string, flush: "immediate" | "throttled") {
+  function record(
+    phase: ActivityPhase,
+    event: string,
+    flush: "immediate" | "throttled",
+  ) {
     if (disabled) return;
     if (flush === "immediate") clearPending();
     state.updatedAt = now();
@@ -172,6 +178,12 @@ export function createSubagentActivityRecorder(params: {
     },
     waiting() {
       record("waiting", "waiting", "immediate");
+    },
+    heartbeat() {
+      if (disabled) return;
+      state.updatedAt = now();
+      state.latestEvent = "heartbeat";
+      scheduleFlush();
     },
   };
 }

@@ -1,6 +1,7 @@
 {
   "status": {
     "enabled": true,
-    "lineLimit": 4
+    "lineLimit": 4,
+    "stallAfterMs": 180000
   }
 }

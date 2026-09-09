@@ -13,6 +13,8 @@ export interface StatusConfig {
   enabled: boolean;
   /** Maximum number of widget rows rendered per status refresh. */
   lineLimit: number;
+  /** Milliseconds without activity updates before a subagent is shown as stalled. */
+  stallAfterMs: number;
 }
 
 /** Root directory of the package, used to locate configuration files. */
@@ -20,7 +22,13 @@ const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const DEFAULT_CONFIG_PATH = join(PACKAGE_ROOT, "config.json");
 const EXAMPLE_CONFIG_PATH = join(PACKAGE_ROOT, "config.json.example");
 
-export const DEFAULT_STATUS_CONFIG: StatusConfig = { enabled: true, lineLimit: 4 };
+export const DEFAULT_STATUS_CONFIG: StatusConfig = {
+  enabled: true,
+  lineLimit: 4,
+  stallAfterMs: 180_000,
+};
+
+export const DEFAULT_STALL_AFTER_MS = 180_000;
 
 function readJson(path: string): unknown | null {
   if (typeof path !== "string" || path.includes("\0")) return null;
@@ -45,10 +53,18 @@ function parseConfig(raw: unknown): StatusConfig {
     throw new Error("status.enabled must be a boolean");
   }
   const lineLimit =
-    typeof s.lineLimit === "number" && Number.isFinite(s.lineLimit) && s.lineLimit > 0
+    typeof s.lineLimit === "number" &&
+    Number.isFinite(s.lineLimit) &&
+    s.lineLimit > 0
       ? Math.floor(s.lineLimit)
       : DEFAULT_STATUS_CONFIG.lineLimit;
-  return { enabled: s.enabled, lineLimit };
+  const stallAfterMs =
+    typeof s.stallAfterMs === "number" &&
+    Number.isFinite(s.stallAfterMs) &&
+    s.stallAfterMs > 0
+      ? Math.floor(s.stallAfterMs)
+      : DEFAULT_STATUS_CONFIG.stallAfterMs;
+  return { enabled: s.enabled, lineLimit, stallAfterMs };
 }
 
 export function loadStatusConfig(
@@ -65,9 +81,12 @@ export function loadStatusConfig(
 
 // ── Status classification (used by the parent widget) ──
 
-export type SubagentKind = "starting" | "active" | "waiting" | "done" | "stalled";
-
-const STALL_AFTER_MS = 60_000;
+export type SubagentKind =
+  | "starting"
+  | "active"
+  | "waiting"
+  | "done"
+  | "stalled";
 
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -87,25 +106,37 @@ export interface ActivityView {
 /**
  * Classifies a subagent's runtime state based on its last activity update.
  */
-export function classifyActivity(view: ActivityView, now: number): {
+export function classifyActivity(
+  view: ActivityView,
+  now: number,
+  stallAfterMs: number = DEFAULT_STALL_AFTER_MS,
+): {
   kind: SubagentKind;
   elapsedText: string;
 } {
   const elapsedMs = now - view.updatedAt;
   const elapsedText = formatDuration(elapsedMs);
+  const threshold =
+    Number.isFinite(stallAfterMs) && stallAfterMs > 0
+      ? stallAfterMs
+      : DEFAULT_STALL_AFTER_MS;
 
   // Unreported activity is classified as starting if recent, or stalled if overdue.
   if (!view.ok) {
-    const kind: SubagentKind = elapsedMs >= STALL_AFTER_MS ? "stalled" : "starting";
+    const kind: SubagentKind = elapsedMs >= threshold ? "stalled" : "starting";
     return { kind, elapsedText };
   }
 
   // Activity exceeding the stall threshold indicates a hung or crashed process.
-  if (elapsedMs >= STALL_AFTER_MS) {
+  if (elapsedMs >= threshold) {
     return { kind: "stalled", elapsedText };
   }
 
-  if (view.phase === "active" || view.phase === "waiting" || view.phase === "done") {
+  if (
+    view.phase === "active" ||
+    view.phase === "waiting" ||
+    view.phase === "done"
+  ) {
     return { kind: view.phase, elapsedText };
   }
 

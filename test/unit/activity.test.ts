@@ -35,6 +35,28 @@ describe("activity.ts", () => {
     rmSync(d, { recursive: true, force: true });
   });
 
+  it("heartbeat refreshes updatedAt while preserving the active phase", () => {
+    const d = mkdtempSync(join(tmpdir(), "iss-activity-hb-"));
+    const file = getSubagentActivityFile(d, "child-hb");
+    let now = 1000;
+    const recorder = createSubagentActivityRecorder({
+      runningChildId: "child-hb",
+      activityFile: file,
+      now: () => now,
+    });
+    recorder.sessionStart();
+    recorder.agentStart();
+    now = 21000;
+    recorder.heartbeat();
+    const view = readSubagentActivityFile(file, "child-hb");
+    assert.ok(view.ok);
+    if (view.ok) {
+      assert.equal(view.activity.phase, "active");
+      assert.equal(view.activity.updatedAt, 21000);
+    }
+    rmSync(d, { recursive: true, force: true });
+  });
+
   it("returns ok:false for a missing file", () => {
     const d = mkdtempSync(join(tmpdir(), "iss-activity-2-"));
     const view = readSubagentActivityFile(getSubagentActivityFile(d, "x"), "x");
@@ -45,7 +67,10 @@ describe("activity.ts", () => {
   it("records throttled tool activity without throwing", () => {
     const d = mkdtempSync(join(tmpdir(), "iss-activity-3-"));
     const file = getSubagentActivityFile(d, "c2");
-    const recorder = createSubagentActivityRecorder({ runningChildId: "c2", activityFile: file });
+    const recorder = createSubagentActivityRecorder({
+      runningChildId: "c2",
+      activityFile: file,
+    });
     recorder.sessionStart();
     for (let i = 0; i < 50; i++) {
       recorder.toolStart();

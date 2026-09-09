@@ -125,13 +125,14 @@ The widget tracks each sub-agent from a runtime activity snapshot written by the
 
 Status display is configured via `config.json` in the package directory. A `config.json.example`
 is provided; copy it to `config.json` to customize the widget. **If `config.json` is absent,
-the extension falls back to safe in-code defaults (`enabled: true`, `lineLimit: 4`)** rather than failing to load.
+the extension falls back to safe in-code defaults (`enabled: true`, `lineLimit: 4`, `stallAfterMs: 180000`)** rather than failing to load.
 
 ```json
 {
   "status": {
     "enabled": true,
-    "lineLimit": 4
+    "lineLimit": 4,
+    "stallAfterMs": 180000
   }
 }
 ```
@@ -142,6 +143,7 @@ the extension falls back to safe in-code defaults (`enabled: true`, `lineLimit: 
 | ----- | ---- | ------- | ----------- |
 | `status.enabled` | boolean | `true` | Show or hide the live status widget above the editor |
 | `status.lineLimit` | number | `4` | Maximum number of concurrent subagent status rows rendered |
+| `status.stallAfterMs` | number | `180000` | Milliseconds without activity updates before a subagent is shown as stalled |
 
 ## Requirements & Installation
 
@@ -169,10 +171,12 @@ ln -sfn "$(pwd)" ~/.pi/agent/extensions/interactive-subagents
 
 - **Bundled agents:** Out of the box, `scout`, `researcher`, and `worker` are auto-discovered directly from the extension package's `agents/` directory.
 - **Global customizations:** Place or copy `.md` files in `~/.pi/agent/agents/` to define or customize agents available across all workspaces:
+
   ```bash
   mkdir -p ~/.pi/agent/agents
   cp agents/*.md ~/.pi/agent/agents/   # optional: override global defaults
   ```
+
 - **Project-specific agents:** Place `.md` files in `.pi/agents/` in any project root to define workspace-scoped agents.
 - **Discovery priority:** **`project (.pi/agents/)` > `global (~/.pi/agent/agents/)` > `package-bundled (agents/)`**.
 
