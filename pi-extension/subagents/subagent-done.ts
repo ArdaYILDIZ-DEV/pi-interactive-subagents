@@ -1,8 +1,11 @@
 /**
- * Extension loaded into child subagent processes.
+ * Child-side extension, loaded inside each subagent process.
  *
- * Manages tool status display, orchestrator communication (`ask_question`),
- * and automated exit handling upon task completion or error.
+ * Reports liveness through the activity recorder, relays orchestrator
+ * questions via `ask_question`, and auto-exits when the task completes.
+ * Completion is signaled to the parent with sidecar files next to the
+ * session file: `.done` on success, `.exit` on error, `.ask` per question.
+ * Auto-exit is refused while child subagents are still running.
  */
 import type {
   ExtensionAPI,
@@ -62,6 +65,12 @@ function writeExitSidecar(
   }
 }
 
+/**
+ * Child-process entry point. All hooks below only observe and report; the
+ * orchestrator-side supervision lives in the parent extension.
+ *
+ * @param pi Child session extension host.
+ */
 export default function (pi: ExtensionAPI) {
   let toolNames: string[] = [];
   let denied: string[] = [];
@@ -124,7 +133,6 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  let agentStarted = false;
   let awaitingAnswer = false;
   let isExiting = false;
   let lastSeenMessages: readonly AssistantMessageLike[] | undefined;
@@ -156,6 +164,11 @@ export default function (pi: ExtensionAPI) {
     return Boolean(process.env.PI_SUBAGENT_SESSION);
   }
 
+  /**
+   * Decides whether this turn ends the process. Skips exit while an
+   * orchestrator answer is pending or children still run, so neither a
+   * question nor a subtree is orphaned by an early shutdown.
+   */
   function handleExit(
     messages: readonly AssistantMessageLike[] | undefined,
     ctx: ExtensionContext,
@@ -212,7 +225,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", () => {
-    agentStarted = true;
     awaitingAnswer = false;
     recorder.agentStart();
     startHeartbeat();

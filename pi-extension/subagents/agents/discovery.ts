@@ -1,8 +1,10 @@
 /**
- * Agent discovery (extracted from `index.ts` — pure move, no behavior change).
- *
- * Project > global > bundled precedence with later sources overwriting
- * earlier ones by agent name. `SUBAGENT_ALLOWLIST` filtering preserved.
+ * Agent discovery: loads subagent profiles (model, tool loadout, system
+ * prompt) from markdown definitions with project > global > package
+ * precedence. Later sources overwrite earlier ones by agent name.
+ * `SUBAGENT_ALLOWLIST` pins spawn targets from `PI_SUBAGENT_ALLOWED`; `null`
+ * means the top-level session is unrestricted. Config root is overridable
+ * via `PI_CODING_AGENT_DIR`.
  */
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +18,16 @@ export function getAgentConfigDir(): string {
 }
 
 export function getBundledAgentsDir(): string {
-  return join(DISCOVERY_DIR, "../../../agents");
+  const dir = join(DISCOVERY_DIR, "../../../agents");
+  try {
+    if (existsSync(dir)) return dir;
+  } catch {
+    // existsSync should not throw; fall through to stable return below.
+  }
+  // Safe fallback: return computed path unchanged. Callers already guard
+  // missing dirs (loadAgentDefaults via existsSync, discoverAgentDefinitions
+  // via readdirSafe), so a missing bundled dir yields null/[] without throwing.
+  return dir;
 }
 
 export interface AgentDefaults {
@@ -86,6 +97,15 @@ export function parseSystemPromptMode(
   return undefined;
 }
 
+/**
+ * Parses one agent markdown file: YAML-ish frontmatter between `---`
+ * fences plus a free-form body. Unknown keys are ignored; a file without
+ * frontmatter is not an agent definition.
+ *
+ * @param content Raw markdown source.
+ * @param fallbackName Name used when frontmatter omits `name`.
+ * @returns Parsed definition, or null when frontmatter is missing.
+ */
 export function parseAgentDefinition(
   content: string,
   fallbackName: string,
@@ -125,6 +145,13 @@ export function parseAgentDefinition(
   };
 }
 
+/**
+ * Resolves one agent profile, trying exact then lowercase spellings so
+ * `Worker` and `worker` find the same definition file.
+ *
+ * @param agentName Agent name as passed to the `subagent` tool.
+ * @returns Parsed defaults, or null when no definition file exists.
+ */
 export function loadAgentDefaults(agentName: string): AgentDefaults | null {
   const configDir = getAgentConfigDir();
   const normalized = agentName.toLowerCase();
@@ -155,6 +182,13 @@ function readdirSafe(dir: string): string[] {
   }
 }
 
+/**
+ * Lists every known agent once, with project definitions winning over
+ * global ones and global ones over bundled ones. Applies the spawn
+ * allowlist when the session is restricted.
+ *
+ * @returns Deduplicated definitions, each tagged with its winning source.
+ */
 export function discoverAgentDefinitions(): ListedAgentDefinition[] {
   const agents = new Map<string, ListedAgentDefinition>();
   const dirs: Array<{ path: string; source: ListedAgentDefinition["source"] }> =
