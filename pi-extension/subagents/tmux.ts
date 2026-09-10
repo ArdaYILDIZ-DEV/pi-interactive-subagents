@@ -226,10 +226,19 @@ export async function isPaneAliveAsync(surface: string): Promise<boolean> {
 
 export function closeSurface(surface: string): void {
   requireTmux();
+  // Skip kill-pane when the pane is already gone. That is the normal case
+  // (the launch script ends with `exit`, so the shell closes the pane before
+  // the watcher runs), and every kill-pane aimed at a dead pane makes the
+  // tmux server flash "can't find pane: %N". list-panes targets no pane,
+  // so this probe can never fail that way.
+  if (!isPaneAlive(surface)) {
+    rebalanceSurfaces();
+    return;
+  }
   try {
     execFileSync("tmux", ["kill-pane", "-t", surface], { encoding: "utf8" });
   } catch {
-    // Pane may already be gone if the process exited before kill-pane ran.
+    // Pane raced us and closed between the liveness probe and kill-pane.
   }
   rebalanceSurfaces();
 }
@@ -347,6 +356,13 @@ export async function pollForExit(
     if (options.sessionFile) {
       const sidecarResult = checkSessionSidecars(options.sessionFile);
       if (sidecarResult) return sidecarResult;
+    }
+
+    // Probe liveness before touching the pane: capture-pane aimed at a dead
+    // pane fails loudly on the tmux server ("can't find pane: %N") on every
+    // cycle, while list-panes targets no pane and stays quiet.
+    if (!(await isPaneAliveAsync(surface))) {
+      return { reason: "done", exitCode: 0 };
     }
 
     // Fall back to terminal sentinel output if sidecar files are unavailable.
