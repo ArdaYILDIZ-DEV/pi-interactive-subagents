@@ -14,7 +14,7 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
-import { isMuxAvailable, muxSetupHint } from "../tmux.ts";
+import { closeSurface, isMuxAvailable, muxSetupHint } from "../tmux.ts";
 import {
   loadAgentDefaults,
   discoverAgentDefinitions,
@@ -35,6 +35,7 @@ import {
   attachSubagentWatcher,
   startStatusSupervision,
   startWidgetRefreshLater,
+  stopDispatcherTimers,
 } from "../lifecycle/dispatcher.ts";
 import type { RunningSubagent } from "../index.ts";
 
@@ -127,6 +128,7 @@ function uniqueRunningName(
 }
 
 export interface SubagentToolDeps {
+  signal?: AbortSignal;
   runningSubagents: Map<string, RunningSubagent>;
   updateWidget: () => void;
   getPi: () => ExtensionAPI | null;
@@ -234,25 +236,41 @@ export function registerSubagentTool(
           params,
           ctx as LaunchContext,
           deps.runningSubagents,
+          {
+            signal: AbortSignal.any([_signal, deps.signal].filter(
+              (signal): signal is AbortSignal => signal !== undefined,
+            )),
+            isActive: () => deps.getPi() === pi,
+          },
         );
       } finally {
         if (reservedName) reservedNames.delete(reservedName);
       }
-
-      registerName(parentArtifactDir, running.name, {
-        sessionFile: running.sessionFile,
-        sessionId: getSessionId(running.sessionFile),
-      });
 
       const dispatcherDeps = {
         runningSubagents: deps.runningSubagents,
         updateWidget: deps.updateWidget,
         getPi: deps.getPi,
       };
-      startWidgetRefreshLater(dispatcherDeps);
-      startStatusSupervision(dispatcherDeps);
-
-      attachSubagentWatcher(running, pi, dispatcherDeps, { isResume: false });
+      try {
+        registerName(parentArtifactDir, running.name, {
+          sessionFile: running.sessionFile,
+          sessionId: getSessionId(running.sessionFile),
+        });
+        attachSubagentWatcher(running, pi, dispatcherDeps, { isResume: false });
+        startWidgetRefreshLater(dispatcherDeps);
+        startStatusSupervision(dispatcherDeps);
+      } catch (error: unknown) {
+        running.abortController?.abort();
+        deps.runningSubagents.delete(running.id);
+        if (deps.runningSubagents.size === 0) stopDispatcherTimers();
+        try {
+          closeSurface(running.surface, deps.getPi() === pi);
+        } catch {
+          // Cleanup is best-effort if the multiplexer itself is unavailable.
+        }
+        throw error;
+      }
 
       return {
         content: [
@@ -472,6 +490,12 @@ export function registerSubagentMessageTool(
         pi,
         deps.runningSubagents,
         { updateWidget: deps.updateWidget, getPi: deps.getPi },
+        {
+          signal: AbortSignal.any([_signal, deps.signal].filter(
+            (signal): signal is AbortSignal => signal !== undefined,
+          )),
+          isActive: () => deps.getPi() === pi,
+        },
       );
     },
     renderResult(result, _opts, theme) {

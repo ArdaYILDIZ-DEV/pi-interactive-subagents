@@ -63,6 +63,12 @@ export function shellEscape(s: string): string {
 const SUBAGENT_TMUX_LAYOUT = "even-horizontal";
 let rebalanceTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Cancel deferred layout work before the owning extension runtime is disposed. */
+export function stopSurfaceTimers(): void {
+  if (rebalanceTimer) clearTimeout(rebalanceTimer);
+  rebalanceTimer = null;
+}
+
 /**
  * Debounced rebalance of the even-horizontal layout.
  * Called after every split or close so panes share width evenly.
@@ -224,7 +230,7 @@ export async function isPaneAliveAsync(surface: string): Promise<boolean> {
   }
 }
 
-export function closeSurface(surface: string): void {
+export function closeSurface(surface: string, rebalance = true): void {
   requireTmux();
   // Skip kill-pane when the pane is already gone. That is the normal case
   // (the launch script ends with `exit`, so the shell closes the pane before
@@ -232,7 +238,7 @@ export function closeSurface(surface: string): void {
   // tmux server flash "can't find pane: %N". list-panes targets no pane,
   // so this probe can never fail that way.
   if (!isPaneAlive(surface)) {
-    rebalanceSurfaces();
+    if (rebalance) rebalanceSurfaces();
     return;
   }
   try {
@@ -240,7 +246,7 @@ export function closeSurface(surface: string): void {
   } catch {
     // Pane raced us and closed between the liveness probe and kill-pane.
   }
-  rebalanceSurfaces();
+  if (rebalance) rebalanceSurfaces();
 }
 
 export interface DoneSidecarPayload {

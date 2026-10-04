@@ -28,9 +28,10 @@ import {
   attachSubagentWatcher,
   startStatusSupervision,
   startWidgetRefreshLater,
+  stopDispatcherTimers,
   type AttachDeps,
 } from "./dispatcher.ts";
-import type { LaunchContext } from "./launch.ts";
+import { assertLaunchActive, type LaunchContext, type LaunchControl } from "./launch.ts";
 import type { RunningSubagent } from "../index.ts";
 import type { SubagentMessageDetails } from "../index.ts";
 
@@ -58,6 +59,7 @@ export function resumeSubagent(
   pi: ExtensionAPI,
   runningSubagents: Map<string, RunningSubagent>,
   deps: Omit<AttachDeps, "runningSubagents">,
+  control?: LaunchControl,
 ): {
   content: Array<{ type: "text"; text: string }>;
   details: SubagentMessageDetails;
@@ -75,6 +77,7 @@ export function resumeSubagent(
     };
   }
 
+  assertLaunchActive(control);
   const id = Math.random().toString(16).slice(2, 10);
   const startTime = Date.now();
   const resumedSessionId = entry.sessionId ?? getSessionId(sessionPath) ?? name;
@@ -86,15 +89,11 @@ export function resumeSubagent(
   const activityFile = getSubagentActivityFile(artifactDir, id);
   mkdirSync(dirname(activityFile), { recursive: true });
 
-  const surface = createSurface(name);
   const dispatcherDeps: AttachDeps = {
     runningSubagents,
     updateWidget: deps.updateWidget,
     getPi: deps.getPi,
   };
-  startStatusSupervision(dispatcherDeps);
-  void startWidgetRefreshLater(dispatcherDeps);
-
   const parts = buildSubagentCliParts(sessionPath, loadout, {
     artifactDir,
     name,
@@ -106,76 +105,81 @@ export function resumeSubagent(
     parts.push(shellEscape(`@${resumeMsgFile}`));
   }
 
-  const envParts = buildSubagentEnv({
-    surface,
-    sessionFile: sessionPath,
-    id,
-    name,
-    activityFile,
-    agent: loadout.agent,
-    agentDir: loadout.agentDir,
-    allowedAgents: loadout.spawnable,
-    autoExit: true,
-  });
-
-  const command = buildSubagentCommand({
-    cwd: loadout.cwd,
-    envParts,
-    parts,
-  });
-
   const safeName = sanitizeSubagentName(name, "resume");
   const launchScriptFile = join(
-    artifactDir,
-    "subagent-scripts",
-    `${safeName}-resume-${Date.now()}.sh`,
+    artifactDir, "subagent-scripts", `${safeName}-resume-${Date.now()}.sh`,
   );
+  assertLaunchActive(control);
+  const surface = createSurface(name);
+  let running: RunningSubagent | undefined;
   try {
+    const envParts = buildSubagentEnv({
+      surface,
+      sessionFile: sessionPath,
+      id,
+      name,
+      activityFile,
+      agent: loadout.agent,
+      agentDir: loadout.agentDir,
+      allowedAgents: loadout.spawnable,
+      autoExit: true,
+    });
+
+    const command = buildSubagentCommand({
+      cwd: loadout.cwd,
+      envParts,
+      parts,
+    });
+
+    assertLaunchActive(control);
     sendLongCommand(surface, command, {
       scriptPath: launchScriptFile,
       scriptPreamble: buildScriptPreamble("resume", name, sessionPath, surface),
     });
-  } catch (error: unknown) {
-    // Same orphan-pane + raw-stderr hazard as launch: clean up, then rethrow framed.
-    try {
-      closeSurface(surface);
-    } catch {
-      // Pane already gone; cleanup was best-effort.
-    }
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Failed to resume subagent "${name}": its tmux pane (${surface}) went away before the resume command could be delivered (${detail}). The orphan pane was cleaned up; retry the resume.`,
-    );
-  }
+    assertLaunchActive(control);
 
-  const running: RunningSubagent = {
-    id,
-    name,
-    task: message ?? "",
-    agent: loadout.agent ?? undefined,
-    surface,
-    startTime,
-    sessionFile: sessionPath,
-    launchScriptFile,
-    activityFile,
-    interactive: false,
-  };
-  runningSubagents.set(id, running);
-
-  attachSubagentWatcher(running, pi, dispatcherDeps, {
-    isResume: true,
-    sessionId: resumedSessionId,
-  });
-
-  return {
-    content: [{ type: "text" as const, text: `Session "${name}" resumed.` }],
-    details: {
+    running = {
       id,
       name,
-      sessionId: resumedSessionId,
+      task: message ?? "",
+      agent: loadout.agent ?? undefined,
+      surface,
+      startTime,
       sessionFile: sessionPath,
       launchScriptFile,
-      status: "started",
-    },
-  };
+      activityFile,
+      interactive: false,
+    };
+    runningSubagents.set(id, running);
+
+    attachSubagentWatcher(running, pi, dispatcherDeps, {
+      isResume: true,
+      sessionId: resumedSessionId,
+    });
+    startWidgetRefreshLater(dispatcherDeps);
+    startStatusSupervision(dispatcherDeps);
+
+    return {
+      content: [{ type: "text" as const, text: `Session "${name}" resumed.` }],
+      details: {
+        id,
+        name,
+        sessionId: resumedSessionId,
+        sessionFile: sessionPath,
+        launchScriptFile,
+        status: "started",
+      },
+    };
+  } catch (error: unknown) {
+    running?.abortController?.abort();
+    runningSubagents.delete(id);
+    if (runningSubagents.size === 0) stopDispatcherTimers();
+    try {
+      closeSurface(surface, control?.isActive?.() !== false);
+    } catch {
+      // Cleanup is best-effort if the multiplexer itself is unavailable.
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to resume subagent "${name}" (${surface}): ${detail}. Pane cleanup was attempted.`);
+  }
 }

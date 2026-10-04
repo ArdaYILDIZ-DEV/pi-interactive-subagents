@@ -12,7 +12,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { closeSurface } from "./tmux.ts";
+import { closeSurface, stopSurfaceTimers } from "./tmux.ts";
 import type { SubagentActivityState } from "./activity.ts";
 
 import { publishRunningChildrenCount } from "./registry.ts";
@@ -190,6 +190,7 @@ import {
  * @param pi Extension host for tools, commands, events, and messages.
  */
 export default function subagentsExtension(pi: ExtensionAPI) {
+  const runtimeAbort = new AbortController();
   latestPi = pi;
 
   pi.on("session_start", (_event, ctx) => {
@@ -201,20 +202,23 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     // Invalidate session-bound handles before abort resolves any watcher promises.
     latestPi = null;
     latestCtx = null;
+    runtimeAbort.abort();
     stopDispatcherTimers();
     for (const agent of runningSubagents.values()) {
       agent.abortController?.abort();
       try {
-        closeSurface(agent.surface);
+        closeSurface(agent.surface, false);
       } catch {
         // Pane may already be gone if the subagent exited before shutdown.
       }
     }
     runningSubagents.clear();
+    stopSurfaceTimers();
   });
 
   const toolDeps = {
     runningSubagents,
+    signal: runtimeAbort.signal,
     updateWidget: () => {
       if (latestPi === pi) updateWidget();
     },

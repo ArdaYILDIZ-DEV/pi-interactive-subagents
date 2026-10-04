@@ -45,6 +45,35 @@ export interface LaunchContext {
   cwd: string;
 }
 
+/** Cancellation and runtime-liveness controls for an in-flight launch. */
+export interface LaunchControl {
+  signal?: AbortSignal;
+  isActive?: () => boolean;
+}
+
+export function assertLaunchActive(control?: LaunchControl): void {
+  if (control?.signal?.aborted || (control?.isActive && !control.isActive())) {
+    throw new Error("Subagent launch cancelled: the request or extension runtime is no longer active.");
+  }
+}
+
+function waitForShellReady(control?: LaunchControl): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const signal = control?.signal;
+    function onAbort() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("Subagent launch cancelled during the shell-ready delay."));
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, getShellReadyDelayMs());
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
 /**
  * Launch inputs. `name` is normalized in place to the effective display
  * name, so callers must treat `params` as mutated on success.
@@ -79,7 +108,9 @@ export async function launchSubagent(
   params: LaunchParams,
   ctx: LaunchContext,
   runningSubagents: Map<string, RunningSubagent>,
+  control?: LaunchControl,
 ): Promise<RunningSubagent> {
+  assertLaunchActive(control);
   const startTime = Date.now();
   const id = Math.random().toString(16).slice(2, 10);
 
@@ -117,12 +148,6 @@ export async function launchSubagent(
 
   const effectiveName = params.name?.trim() || params.agent || "subagent";
   params.name = effectiveName;
-
-  // Split from the parent pane so the new pane appears alongside it without stealing keyboard focus.
-  const surface = createSurface(effectiveName);
-  await new Promise<void>((resolve) =>
-    setTimeout(resolve, getShellReadyDelayMs()),
-  );
 
   // Record the parent→child relationship so subagent_message can locate this session by name later.
   seedSubagentSessionFile({
@@ -174,33 +199,32 @@ export async function launchSubagent(
     parts.push(shellEscape(arg));
   }
 
-  const envParts = buildSubagentEnv({
-    surface,
-    sessionFile: subagentSessionFile,
-    id,
-    name: effectiveName,
-    activityFile,
-    agent: params.agent,
-    agentDir: effectiveAgentDir,
-    allowedAgents: agentDefs?.subagentAgents,
-    autoExit: effectiveAutoExit,
-  });
-
-  const command = buildSubagentCommand({
-    cwd: effectiveCwd,
-    envParts,
-    parts,
-  });
-
   const safeName = sanitizeSubagentName(effectiveName, "subagent");
-  const launchScriptName = `${safeName}-${id}.sh`;
-  const launchScriptFile = join(
-    artifactDir,
-    "subagent-scripts",
-    launchScriptName,
-  );
+  const launchScriptFile = join(artifactDir, "subagent-scripts", `${safeName}-${id}.sh`);
 
+  assertLaunchActive(control);
+  const surface = createSurface(effectiveName);
   try {
+    await waitForShellReady(control);
+    assertLaunchActive(control);
+    const envParts = buildSubagentEnv({
+      surface,
+      sessionFile: subagentSessionFile,
+      id,
+      name: effectiveName,
+      activityFile,
+      agent: params.agent,
+      agentDir: effectiveAgentDir,
+      allowedAgents: agentDefs?.subagentAgents,
+      autoExit: effectiveAutoExit,
+    });
+
+    const command = buildSubagentCommand({
+      cwd: effectiveCwd,
+      envParts,
+      parts,
+    });
+
     sendLongCommand(surface, command, {
       scriptPath: launchScriptFile,
       scriptPreamble: buildScriptPreamble(
@@ -210,33 +234,29 @@ export async function launchSubagent(
         surface,
       ),
     });
+    assertLaunchActive(control);
+
+    const running: RunningSubagent = {
+      id,
+      name: effectiveName,
+      task: params.task,
+      agent: params.agent,
+      surface,
+      startTime,
+      sessionFile: subagentSessionFile,
+      launchScriptFile,
+      activityFile,
+      interactive: effectiveInteractive,
+    };
+    runningSubagents.set(id, running);
+    return running;
   } catch (error: unknown) {
-    // The fresh pane died between split and send (or tmux itself failed).
-    // Without cleanup this leaks an orphan pane no watcher will ever close,
-    // and without wrapping the raw tmux stderr reaches the user unframed.
     try {
-      closeSurface(surface);
+      closeSurface(surface, control?.isActive?.() !== false);
     } catch {
-      // Pane already gone; cleanup was best-effort.
+      // Cleanup is best-effort if the multiplexer itself is unavailable.
     }
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Failed to start subagent "${effectiveName}": its tmux pane (${surface}) went away before the launch command could be delivered (${detail}). The orphan pane was cleaned up; retry the spawn.`,
-    );
+    throw new Error(`Failed to start subagent "${effectiveName}" (${surface}): ${detail}. Pane cleanup was attempted.`);
   }
-
-  const running: RunningSubagent = {
-    id,
-    name: effectiveName,
-    task: params.task,
-    agent: params.agent,
-    surface,
-    startTime,
-    sessionFile: subagentSessionFile,
-    launchScriptFile,
-    activityFile,
-    interactive: effectiveInteractive,
-  };
-  runningSubagents.set(id, running);
-  return running;
 }

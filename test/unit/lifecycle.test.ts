@@ -1,14 +1,17 @@
 import { it } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import subagentsExtension, { type RunningSubagent } from "../../pi-extension/subagents/index.ts";
 import { attachSubagentWatcher, stopDispatcherTimers } from "../../pi-extension/subagents/lifecycle/dispatcher.ts";
 import { resumeSubagent } from "../../pi-extension/subagents/lifecycle/resume.ts";
-import type { LaunchContext } from "../../pi-extension/subagents/lifecycle/launch.ts";
+import { launchSubagent, type LaunchContext } from "../../pi-extension/subagents/lifecycle/launch.ts";
+import { closeSurface, createSurface, clearCommandAvailabilityCache, stopSurfaceTimers } from "../../pi-extension/subagents/tmux.ts";
+import { getArtifactDir, getDefaultSessionDirFor } from "../../pi-extension/subagents/lifecycle/seed.ts";
+import { writeSubagentLoadout, type SubagentLoadout } from "../../pi-extension/subagents/session.ts";
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -219,4 +222,189 @@ it("refuses invalid resume snapshots before touching session APIs or panes", (t)
   assert.match(result.details.error ?? "", /snapshot is missing or invalid/);
   assert.match(result.content[0].text, /restrictions cannot be verified/);
   assert.equal(map.size, 0);
+});
+
+function fakeLaunchEnv(t: TestContext) {
+  const dir = mkdtempSync(join(tmpdir(), "iss-launch-"));
+  const savedEnv = { ...process.env };
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const log = join(dir, "tmux.log");
+  const alive = join(dir, "pane-alive");
+  writeFileSync(join(bin, "tmux"), `#!/bin/sh
+printf '%s\\n' "$*" >> "$ISS_FAKE_TMUX_LOG"
+case "$1" in
+  split-window) touch "$ISS_FAKE_TMUX_ALIVE"; printf '%s\\n' '%iss-test';;
+  list-panes) if [ -f "$ISS_FAKE_TMUX_ALIVE" ]; then printf '%s\\n' '%iss-test'; fi;;
+  kill-pane) rm -f "$ISS_FAKE_TMUX_ALIVE";;
+  send-keys) if [ "$ISS_FAKE_FAIL_SEND" = 1 ]; then echo 'test delivery failed' >&2; exit 1; fi;;
+esac
+`, { mode: 0o755 });
+  process.env.PATH = `${bin}:${savedEnv.PATH ?? ""}`;
+  process.env.TMUX = "test-only";
+  process.env.TMUX_PANE = "%test-parent";
+  process.env.ISS_FAKE_TMUX_LOG = log;
+  process.env.ISS_FAKE_TMUX_ALIVE = alive;
+  process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
+  process.env.PI_SUBAGENT_SHELL_READY_DELAY_MS = "10";
+  delete process.env.ISS_FAKE_FAIL_SEND;
+  clearCommandAvailabilityCache();
+  const parent = join(dir, "parent.jsonl");
+  writeFileSync(parent, JSON.stringify({ type: "session", id: "parent-id" }) + "\n");
+  const ctx: LaunchContext = {
+    cwd: "/tmp",
+    sessionManager: {
+      getSessionFile: () => parent,
+      getSessionId: () => "parent-id",
+      getSessionDir: () => dir,
+    },
+  };
+  const map = new Map<string, RunningSubagent>();
+  const artifactDir = getArtifactDir(dir, "parent-id");
+  t.after(() => {
+    for (const running of map.values()) {
+      running.abortController?.abort();
+      closeSurface(running.surface);
+    }
+    stopDispatcherTimers();
+    stopSurfaceTimers();
+    clearCommandAvailabilityCache();
+    process.env = savedEnv;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  function assertNoOrphan() {
+    const commands = existsSync(log) ? readFileSync(log, "utf8").split("\n") : [];
+    assert.equal(commands.filter((line) => line.startsWith("split-window ")).length,
+      commands.filter((line) => line.startsWith("kill-pane ")).length,
+      "every acquired pane must be closed on failure");
+    assert.equal(map.size, 0);
+  }
+  const snapshot: SubagentLoadout = {
+    agent: "test", toolAllowlist: "read,ask_question", model: null, thinking: null,
+    systemPromptMode: null, identity: null, spawnable: null,
+    autoExit: true, cwd: null, agentDir: process.env.PI_CODING_AGENT_DIR!,
+  };
+  const child = join(dir, "existing-child.jsonl");
+  writeFileSync(child, JSON.stringify({ type: "session", id: "old-child" }) + "\n");
+  writeSubagentLoadout(child, snapshot);
+  const pi = { sendMessage() {} } as unknown as ExtensionAPI;
+  const deps = { getPi: () => pi, updateWidget() {} };
+  return { dir, ctx, map, artifactDir, child, pi, deps, snapshot, assertNoOrphan };
+}
+
+for (const failure of ["activity", "context"] as const) {
+  it(`does not leak a launch pane when ${failure} preparation fails`, async (t) => {
+    const h = fakeLaunchEnv(t);
+    mkdirSync(h.artifactDir, { recursive: true });
+    const obstacle = failure === "activity" ? "subagent-activity" : "context";
+    writeFileSync(join(h.artifactDir, obstacle), "not a directory");
+    await assert.rejects(launchSubagent({ task: "test" }, h.ctx, h.map));
+    h.assertNoOrphan();
+  });
+}
+
+it("does not leak a pane when child session seeding fails", async (t) => {
+  const h = fakeLaunchEnv(t);
+  const sessionDir = getDefaultSessionDirFor(h.ctx.cwd, process.env.PI_CODING_AGENT_DIR!);
+  chmodSync(sessionDir, 0o500);
+  t.after(() => { if (existsSync(sessionDir)) chmodSync(sessionDir, 0o700); });
+  await assert.rejects(launchSubagent({ task: "test" }, h.ctx, h.map));
+  h.assertNoOrphan();
+});
+
+it("cleans up a launch pane when command delivery fails", async (t) => {
+  const h = fakeLaunchEnv(t);
+  process.env.ISS_FAKE_FAIL_SEND = "1";
+  await assert.rejects(launchSubagent({ task: "test" }, h.ctx, h.map), /Failed to start subagent/);
+  h.assertNoOrphan();
+});
+
+it("cancels launch during the shell-ready delay without recording a running child", async (t) => {
+  const h = fakeLaunchEnv(t);
+  const abort = new AbortController();
+  const pending = launchSubagent({ task: "test" }, h.ctx, h.map, { signal: abort.signal });
+  abort.abort();
+  await assert.rejects(pending, /cancelled/);
+  h.assertNoOrphan();
+});
+
+it("refuses launch when the original runtime becomes inactive during the delay", async (t) => {
+  const h = fakeLaunchEnv(t);
+  let active = true;
+  const pending = launchSubagent({ task: "test" }, h.ctx, h.map, { isActive: () => active });
+  active = false;
+  await assert.rejects(pending, /cancelled/);
+  h.assertNoOrphan();
+});
+
+it("does not leak a resume pane when prompt preparation fails", (t) => {
+  const h = fakeLaunchEnv(t);
+  mkdirSync(h.artifactDir, { recursive: true });
+  writeFileSync(join(h.artifactDir, "context"), "not a directory");
+  writeSubagentLoadout(h.child, { ...h.snapshot, identity: "test identity", systemPromptMode: "append" });
+  assert.throws(() => resumeSubagent("test", "follow up", {
+    sessionFile: h.child, sessionId: "old-child",
+  }, h.artifactDir, h.ctx, h.pi, h.map, h.deps));
+  h.assertNoOrphan();
+});
+
+it("cleans up a resume pane when command delivery fails", (t) => {
+  const h = fakeLaunchEnv(t);
+  process.env.ISS_FAKE_FAIL_SEND = "1";
+  assert.throws(() => resumeSubagent("test", "follow up", {
+    sessionFile: h.child, sessionId: "old-child",
+  }, h.artifactDir, h.ctx, h.pi, h.map, h.deps), /Failed to resume subagent/);
+  h.assertNoOrphan();
+});
+
+it("cancels pending tmux layout work when the runtime shuts down", (t) => {
+  const h = fakeLaunchEnv(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+  const pi = {
+    on(name: string, handler: (event: unknown, ctx: unknown) => void) { handlers.set(name, handler); },
+    registerTool() {}, registerCommand() {}, registerMessageRenderer() {},
+  } as unknown as ExtensionAPI;
+  subagentsExtension(pi);
+  createSurface("timer-test");
+  handlers.get("session_shutdown")!({ reason: "reload" }, {});
+  t.mock.timers.tick(1000);
+  const commands = readFileSync(join(h.dir, "tmux.log"), "utf8");
+  assert.equal(commands.includes("select-layout"), false);
+  closeSurface("%iss-test");
+});
+
+it("aborts an in-flight spawn when the extension runtime shuts down", async (t) => {
+  const h = fakeLaunchEnv(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const agents = join(process.env.PI_CODING_AGENT_DIR!, "agents");
+  mkdirSync(agents, { recursive: true });
+  writeFileSync(join(agents, "test.md"), "---\nname: test\ntools: read\n---\n");
+  type Execute = (id: string, params: { agent: string; task: string }, signal: AbortSignal | undefined,
+    onUpdate: undefined, ctx: LaunchContext) => Promise<unknown>;
+  const tools = new Map<string, Execute>();
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+  const pi = {
+    on(name: string, handler: (event: unknown, ctx: unknown) => void) { handlers.set(name, handler); },
+    registerTool(tool: { name: string; execute: Execute }) { tools.set(tool.name, tool.execute); },
+    registerCommand() {}, registerMessageRenderer() {},
+  } as unknown as ExtensionAPI;
+  subagentsExtension(pi);
+  const pending = tools.get("subagent")!("spawn-1", { agent: "test", task: "test" }, undefined, undefined, h.ctx);
+  handlers.get("session_shutdown")!({ reason: "reload" }, {});
+  await assert.rejects(pending, /cancelled/);
+  h.assertNoOrphan();
+  t.mock.timers.tick(1000);
+  assert.equal(readFileSync(join(h.dir, "tmux.log"), "utf8").includes("select-layout"), false,
+    "late launch cleanup must not schedule fresh layout work after shutdown");
+});
+
+it("refuses an already-cancelled resume before creating a pane", (t) => {
+  const h = fakeLaunchEnv(t);
+  const abort = new AbortController();
+  abort.abort();
+  assert.throws(() => resumeSubagent("test", "follow up", {
+    sessionFile: h.child, sessionId: "old-child",
+  }, h.artifactDir, h.ctx, h.pi, h.map, h.deps, { signal: abort.signal }), /cancelled/);
+  h.assertNoOrphan();
 });

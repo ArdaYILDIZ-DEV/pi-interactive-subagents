@@ -145,7 +145,7 @@ export async function watchSubagent(
       : null;
 
     try {
-      closeSurface(surface);
+      closeSurface(surface, deps.getPi() !== null);
     } catch {
       // Pane may already be gone if the process exited on its own.
     }
@@ -165,7 +165,7 @@ export async function watchSubagent(
     };
   } catch (err: unknown) {
     try {
-      closeSurface(surface);
+      closeSurface(surface, deps.getPi() !== null);
     } catch {
       // Pane may already be gone if the process exited on its own.
     }
