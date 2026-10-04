@@ -110,16 +110,25 @@ export function attachSubagentWatcher(
 ): void {
   const watcherAbort = new AbortController();
   running.abortController = watcherAbort;
+  const isActive = () => !watcherAbort.signal.aborted && deps.getPi() === pi;
+  function completeIfActive(): boolean {
+    if (!isActive()) return false;
+    options?.onCompleted?.();
+    if (!isActive()) return false;
+    deps.updateWidget();
+    return isActive();
+  }
 
-  watchSubagent(running, watcherAbort.signal, {
-    getPi: deps.getPi,
+  void watchSubagent(running, watcherAbort.signal, {
+    getPi: () => isActive() ? pi : null,
     removeRunning: (id) => {
-      deps.runningSubagents.delete(id);
+      if (deps.runningSubagents.get(id) === running) {
+        deps.runningSubagents.delete(id);
+      }
     },
   })
     .then((result) => {
-      options?.onCompleted?.();
-      deps.updateWidget();
+      if (!completeIfActive()) return;
       const sessionId = options?.sessionId ?? result.sessionId;
       let summary = result.summary;
       if (options?.isResume && summary === "Sub-agent exited without output") {
@@ -152,25 +161,28 @@ export function attachSubagentWatcher(
         },
         { triggerTurn: true, deliverAs: "steer" },
       );
-    })
-    .catch((err) => {
-      options?.onCompleted?.();
-      deps.updateWidget();
+    }, (err: unknown) => {
+      if (!completeIfActive()) return;
+      const detail = err instanceof Error ? err.message : String(err);
       const prefix = options?.isResume
         ? "Resume"
         : `Sub-agent "${running.name}"`;
       pi.sendMessage(
         {
           customType: "subagent_result",
-          content: `${prefix} error: ${err?.message ?? String(err)}`,
+          content: `${prefix} error: ${detail}`,
           display: true,
           details: {
             name: running.name,
             task: running.task,
-            error: err?.message,
+            error: detail,
           },
         },
         { triggerTurn: true, deliverAs: "steer" },
       );
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Subagent "${running.name}" completion dispatch failed: ${detail}\n`);
     });
 }

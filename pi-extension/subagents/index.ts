@@ -193,10 +193,14 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   latestPi = pi;
 
   pi.on("session_start", (_event, ctx) => {
-    latestCtx = ctx;
+    if (latestPi === pi) latestCtx = ctx;
   });
 
   pi.on("session_shutdown", (_event, _ctx) => {
+    if (latestPi !== pi) return;
+    // Invalidate session-bound handles before abort resolves any watcher promises.
+    latestPi = null;
+    latestCtx = null;
     stopDispatcherTimers();
     for (const agent of runningSubagents.values()) {
       agent.abortController?.abort();
@@ -211,8 +215,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
   const toolDeps = {
     runningSubagents,
-    updateWidget,
-    getPi: () => latestPi,
+    updateWidget: () => {
+      if (latestPi === pi) updateWidget();
+    },
+    getPi: () => latestPi === pi ? pi : null,
   };
   registerSubagentTool(pi, toolDeps);
   registerSubagentsListTool(pi);
