@@ -83,6 +83,22 @@ Spawns must name a known agent at **every** depth:
 
 All three are autonomous (`auto-exit: true`) and carry their identity in the system prompt (`system-prompt: append`).
 
+### Completion safety deadlines
+
+Autonomous children report completion only after Pi emits `agent_settled`, not
+`agent_end`, because retries, compaction, or queued work may still follow the latter.
+Aborted turns, pending questions, and running child agents remain open.
+
+- `PI_SUBAGENT_SETTLE_TIMEOUT_MS` (default `30000`): maximum wait for settlement
+  after an eligible `agent_end`. Starting another run or turn cancels this deadline;
+  it is not a limit on task execution time.
+- `PI_SUBAGENT_SHUTDOWN_TIMEOUT_MS` (default `10000`): maximum wait for Pi's
+  `session_shutdown` notification after requesting orderly shutdown.
+
+Both deadlines require positive integer milliseconds. Expiry writes an error
+sidecar and a stderr diagnostic and exits with code 1; normal shutdown cancels the
+safety timers. There is no fixed 100 ms forced-success exit.
+
 ## Custom agents
 
 Place a `.md` file in `.pi/agents/` (project) or `~/.pi/agent/agents/` (global).
@@ -113,7 +129,7 @@ You are a specialized agent that does X...
 | `subagent_agents` | string | Comma-separated agent names this agent may spawn. **Presence of this field grants the spawning toolset** (`subagent`, `subagent_message`, `subagents_list`) and restricts spawn targets to the list. Omit it and the agent cannot spawn at all |
 | `skills` | string | Comma-separated skill names to auto-load |
 | `system-prompt` | string | `append` or `replace`: pass the body as the child's `--append-system-prompt` / `--system-prompt`. Omit and the body is prepended to the task prompt instead |
-| `auto-exit` | boolean | Auto-shutdown when the agent's turn ends (recommended for all autonomous agents) |
+| `auto-exit` | boolean | Auto-shutdown when the agent run fully settles (recommended for all autonomous agents) |
 | `interactive` | boolean | Defaults to the inverse of `auto-exit`; user-driven agents stay quiet on stall pings |
 | `cwd` | string | Default working directory |
 | `disable-model-invocation` | boolean | Hide from `subagents_list`; still spawnable by explicit name |

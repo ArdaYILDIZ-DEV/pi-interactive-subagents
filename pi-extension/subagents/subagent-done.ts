@@ -15,7 +15,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { createSubagentActivityRecorder } from "./activity.ts";
 import { runningChildrenCount } from "./registry.ts";
 import { parseEnvInt } from "./env.ts";
@@ -137,6 +137,52 @@ export default function (pi: ExtensionAPI) {
   let isExiting = false;
   let lastSeenMessages: readonly AssistantMessageLike[] | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let settleTimer: ReturnType<typeof setTimeout> | null = null;
+  let shutdownTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearSafetyTimers(): void {
+    if (settleTimer) clearTimeout(settleTimer);
+    if (shutdownTimer) clearTimeout(shutdownTimer);
+    settleTimer = null;
+    shutdownTimer = null;
+  }
+
+  function failAndExit(message: string, ctx: ExtensionContext): void {
+    isExiting = true;
+    clearSafetyTimers();
+    stopHeartbeat();
+    const sessionFile = process.env.PI_SUBAGENT_SESSION;
+    if (sessionFile) {
+      try {
+        rmSync(`${sessionFile}.done`, { force: true });
+      } catch {
+        // The stderr diagnostic and nonzero exit remain available if cleanup fails.
+      }
+      writeExitSidecar(sessionFile, { errorMessage: message });
+    }
+    process.stderr.write(`Subagent lifecycle error: ${message}\n`);
+    try {
+      ctx.shutdown();
+    } catch {
+      // The bounded safety exit below does not depend on the host shutdown API.
+    }
+    process.exit(1);
+  }
+
+  function canAutoExit(messages: readonly AssistantMessageLike[] | undefined): boolean {
+    return !awaitingAnswer && runningChildrenCount() === 0 &&
+      shouldAutoExit() && shouldAutoExitOnAgentEnd(messages);
+  }
+
+  function awaitSettlement(ctx: ExtensionContext): void {
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = null;
+    if (isExiting || !canAutoExit(lastSeenMessages)) return;
+    const timeoutMs = parseEnvInt(process.env.PI_SUBAGENT_SETTLE_TIMEOUT_MS, 30_000, 1);
+    settleTimer = setTimeout(() => {
+      failAndExit(`Pi did not emit agent_settled within ${timeoutMs}ms after agent_end.`, ctx);
+    }, timeoutMs);
+  }
 
   function getHeartbeatIntervalMs(): number {
     return parseEnvInt(process.env.PI_SUBAGENT_HEARTBEAT_MS, 15_000, 1);
@@ -173,13 +219,9 @@ export default function (pi: ExtensionAPI) {
     messages: readonly AssistantMessageLike[] | undefined,
     ctx: ExtensionContext,
   ) {
-    if (isExiting || awaitingAnswer) return;
+    if (isExiting) return;
 
-    if (
-      runningChildrenCount() > 0 ||
-      !shouldAutoExit() ||
-      !shouldAutoExitOnAgentEnd(messages)
-    ) {
+    if (!canAutoExit(messages)) {
       recorder.agentEndWaiting();
       return;
     }
@@ -192,20 +234,16 @@ export default function (pi: ExtensionAPI) {
     }
     recorder.agentEndDone();
     stopHeartbeat();
+    const timeoutMs = parseEnvInt(process.env.PI_SUBAGENT_SHUTDOWN_TIMEOUT_MS, 10_000, 1);
+    shutdownTimer = setTimeout(() => {
+      failAndExit(`Pi shutdown did not complete within ${timeoutMs}ms after agent_settled.`, ctx);
+    }, timeoutMs);
     try {
       ctx.shutdown();
-    } catch {
-      // Shutdown is best-effort during exit; the fallback timer below still runs.
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      failAndExit(`Pi shutdown failed after agent_settled: ${detail}`, ctx);
     }
-    // ctx.shutdown() may return before the process has fully wound down;
-    // the timer guarantees the shell prompt returns in the tmux pane.
-    setTimeout(() => {
-      try {
-        process.exit(0);
-      } catch {
-        // process.exit cannot usefully fail here; pane teardown proceeds regardless.
-      }
-    }, 100);
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -225,6 +263,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", () => {
+    clearSafetyTimers();
+    lastSeenMessages = undefined;
     awaitingAnswer = false;
     recorder.agentStart();
     startHeartbeat();
@@ -247,26 +287,26 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("turn_start", () => {
+    clearSafetyTimers();
     recorder.turnStart();
   });
 
   pi.on("session_shutdown", () => {
+    isExiting = true;
+    clearSafetyTimers();
     stopHeartbeat();
   });
 
   pi.on("agent_end", (event, ctx) => {
-    // SAFETY: pi event payloads are untyped at the boundary; narrowed by downstream property checks.
-    const messages = event.messages as unknown as
-      | readonly AssistantMessageLike[]
-      | undefined;
-    lastSeenMessages = messages;
-    handleExit(messages, ctx);
+    lastSeenMessages = Array.isArray(event.messages) ? event.messages : undefined;
+    recorder.agentEndWaiting();
+    awaitSettlement(ctx);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    if (lastSeenMessages) {
-      handleExit(lastSeenMessages, ctx);
-    }
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = null;
+    handleExit(lastSeenMessages, ctx);
   });
 
   pi.registerShortcut("ctrl+alt+o", {
@@ -349,13 +389,16 @@ function shouldAutoExitOnAgentEnd(
 function findLatestAssistantError(
   messages: readonly (AssistantMessageLike | unknown)[] | undefined,
 ): { errorMessage: string } | null {
-  if (!messages) return null;
+  if (!messages) return { errorMessage: "Pi agent_end messages payload is missing or invalid." };
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (typeof msg !== "object" || msg === null || !("role" in msg)) continue;
     const asAssistant = msg as AssistantMessageLike;
     if (asAssistant.role !== "assistant") continue;
-    if (asAssistant.stopReason !== "error") return null;
+    if (asAssistant.stopReason !== "error") {
+      if (["stop", "length", "toolUse"].includes(asAssistant.stopReason ?? "")) return null;
+      return { errorMessage: `Pi final assistant stopReason is missing or unsupported: ${String(asAssistant.stopReason)}.` };
+    }
     const raw =
       typeof asAssistant.errorMessage === "string"
         ? asAssistant.errorMessage.trim()
@@ -366,5 +409,5 @@ function findLatestAssistantError(
         "Subagent agent loop ended with stopReason=error (no errorMessage field).",
     };
   }
-  return null;
+  return { errorMessage: "Pi agent_end messages contain no final assistant message." };
 }
