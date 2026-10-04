@@ -12,9 +12,9 @@
     "test:integration": "node --test --test-concurrency=1 test/integration/*.test.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "@sinclair/typebox": "*"
+    "@earendil-works/pi-coding-agent": "^1.0.1",
+    "@earendil-works/pi-tui": "^1.0.1",
+    "typebox": "^1.3.27"
   },
   "pi": {
     "extensions": [
@@ -22,9 +22,9 @@
     ]
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.3",
-    "@earendil-works/pi-tui": "^0.84.3",
-    "@sinclair/typebox": "^0.34.49",
+    "@earendil-works/pi-coding-agent": "1.0.1",
+    "@earendil-works/pi-tui": "1.0.1",
+    "typebox": "1.3.27",
     "@types/node": "^26.4.0",
     "typescript": "^7.0.2"
   }

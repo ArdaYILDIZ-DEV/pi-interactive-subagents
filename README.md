@@ -163,8 +163,19 @@ the extension falls back to safe in-code defaults (`enabled: true`, `lineLimit: 
 
 ## Requirements & Installation
 
-- [pi](https://github.com/badlogic/pi-mono) (`@earendil-works/pi-coding-agent`)
+- Pi `>=1.0.1 <2.0.0` (`@earendil-works/pi-coding-agent`) and the matching Pi TUI package
 - [tmux](https://github.com/tmux/tmux) (2.6+)
+
+### Compatibility
+
+The declared Pi support range is `^1.0.1`; Pi 0.x and future major versions are
+outside this package's support boundary. The locked development baseline is Pi
+1.0.1 with TypeBox 1.3.27. This baseline is tested; declaring the 1.x range does
+not mean unreleased versions have been tested.
+
+Runtime schemas import the public host-provided `typebox` package, not Pi's
+legacy `@sinclair/typebox` loader alias. Host packages remain peer dependencies
+and are not bundled with the extension.
 
 ### Installation
 
