@@ -45,16 +45,14 @@ describe("tmux.ts", () => {
     });
   });
 
-  it("interpretExitSidecar treats missing/corrupt error payloads as done or fallback error", () => {
-    // Empty object carries no error signal: treated as clean exit (current contract).
-    assert.deepEqual(__test__.interpretExitSidecar({}), {
-      reason: "done",
-      exitCode: 0,
-    });
-    assert.deepEqual(__test__.interpretExitSidecar(null), {
-      reason: "done",
-      exitCode: 0,
-    });
+  it("interpretExitSidecar rejects unknown payloads and preserves error fallbacks", () => {
+    for (const data of [{}, null, [], true, { type: "future-value" }]) {
+      assert.deepEqual(__test__.interpretExitSidecar(data), {
+        reason: "error",
+        exitCode: 1,
+        errorMessage: "Invalid subagent completion sidecar: expected type 'done' or 'error'.",
+      });
+    }
     // Blank or non-string errorMessage falls back to the default message.
     assert.deepEqual(
       __test__.interpretExitSidecar({ type: "error", errorMessage: "   " }),

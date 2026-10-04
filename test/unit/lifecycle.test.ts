@@ -9,8 +9,9 @@ import subagentsExtension, { type RunningSubagent } from "../../pi-extension/sub
 import { attachSubagentWatcher, stopDispatcherTimers } from "../../pi-extension/subagents/lifecycle/dispatcher.ts";
 import { resumeSubagent } from "../../pi-extension/subagents/lifecycle/resume.ts";
 import { launchSubagent, type LaunchContext } from "../../pi-extension/subagents/lifecycle/launch.ts";
-import { closeSurface, createSurface, clearCommandAvailabilityCache, stopSurfaceTimers } from "../../pi-extension/subagents/tmux.ts";
+import { closeSurface, createSurface, clearCommandAvailabilityCache, stopSurfaceTimers, pollForExit } from "../../pi-extension/subagents/tmux.ts";
 import { getArtifactDir, getDefaultSessionDirFor } from "../../pi-extension/subagents/lifecycle/seed.ts";
+import { watchSubagent } from "../../pi-extension/subagents/lifecycle/watch.ts";
 import { writeSubagentLoadout, type SubagentLoadout } from "../../pi-extension/subagents/session.ts";
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -237,6 +238,7 @@ case "$1" in
   split-window) touch "$ISS_FAKE_TMUX_ALIVE"; printf '%s\\n' '%iss-test';;
   list-panes) if [ -f "$ISS_FAKE_TMUX_ALIVE" ]; then printf '%s\\n' '%iss-test'; fi;;
   kill-pane) rm -f "$ISS_FAKE_TMUX_ALIVE";;
+  capture-pane) printf '%s\\n' "$ISS_FAKE_SCREEN";;
   send-keys) if [ "$ISS_FAKE_FAIL_SEND" = 1 ]; then echo 'test delivery failed' >&2; exit 1; fi;;
 esac
 `, { mode: 0o755 });
@@ -248,6 +250,7 @@ esac
   process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
   process.env.PI_SUBAGENT_SHELL_READY_DELAY_MS = "10";
   delete process.env.ISS_FAKE_FAIL_SEND;
+  delete process.env.ISS_FAKE_SCREEN;
   clearCommandAvailabilityCache();
   const parent = join(dir, "parent.jsonl");
   writeFileSync(parent, JSON.stringify({ type: "session", id: "parent-id" }) + "\n");
@@ -406,5 +409,115 @@ it("refuses an already-cancelled resume before creating a pane", (t) => {
   assert.throws(() => resumeSubagent("test", "follow up", {
     sessionFile: h.child, sessionId: "old-child",
   }, h.artifactDir, h.ctx, h.pi, h.map, h.deps, { signal: abort.signal }), /cancelled/);
+  h.assertNoOrphan();
+});
+
+it("reports a lost pane without completion evidence as an unknown failure", async (t) => {
+  const h = fakeLaunchEnv(t);
+  const result = await pollForExit("%iss-test", new AbortController().signal, {
+    interval: 1, sessionFile: h.child,
+  });
+  assert.equal(result.reason, "error");
+  assert.notEqual(result.exitCode, 0);
+  assert.match(result.errorMessage ?? "", /completion.*unknown|unknown.*completion/i);
+});
+
+for (const suffix of ["done", "exit"] as const) {
+  it(`reports malformed .${suffix} sidecars as errors`, async (t) => {
+    const h = fakeLaunchEnv(t);
+    writeFileSync(`${h.child}.${suffix}`, "{broken");
+    const result = await pollForExit("%iss-test", new AbortController().signal, {
+      interval: 1, sessionFile: h.child,
+    });
+    assert.equal(result.reason, "error");
+    assert.notEqual(result.exitCode, 0);
+    assert.match(result.errorMessage ?? "", /completion sidecar/);
+  });
+}
+
+it("prefers explicit failure when both completion sidecars exist", async (t) => {
+  const h = fakeLaunchEnv(t);
+  writeFileSync(`${h.child}.done`, JSON.stringify({ type: "done" }));
+  writeFileSync(`${h.child}.exit`, JSON.stringify({ type: "error", errorMessage: "failed shutdown" }));
+  const result = await pollForExit("%iss-test", new AbortController().signal, {
+    interval: 1, sessionFile: h.child,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.errorMessage, "failed shutdown");
+});
+
+it("does not silently discard a question when host delivery fails", async (t) => {
+  const h = fakeLaunchEnv(t);
+  process.env.PI_SUBAGENT_WATCH_TIMEOUT_MS = "3000";
+  const surface = createSurface("question-test");
+  writeFileSync(`${h.child}.ask`, JSON.stringify({ question: "Which option?" }));
+  const pi = { sendMessage() { throw new Error("question delivery failed"); } } as unknown as ExtensionAPI;
+  const result = await watchSubagent({
+    id: "question-test", name: "test", task: "test", surface,
+    sessionFile: h.child, startTime: Date.now(),
+  }, new AbortController().signal, { getPi: () => pi, removeRunning() {} });
+  assert.match(result.errorMessage ?? "", /question delivery failed/);
+  assert.equal(existsSync(`${h.child}.ask`), true, "retain undelivered question for diagnostics");
+  h.assertNoOrphan();
+});
+
+it("reports malformed question payloads instead of waiting silently", async (t) => {
+  const h = fakeLaunchEnv(t);
+  process.env.PI_SUBAGENT_WATCH_TIMEOUT_MS = "3000";
+  const surface = createSurface("question-test");
+  writeFileSync(`${h.child}.ask`, JSON.stringify({ question: 7 }));
+  const result = await watchSubagent({
+    id: "question-test", name: "test", task: "test", surface,
+    sessionFile: h.child, startTime: Date.now(),
+  }, new AbortController().signal, { getPi: () => h.pi, removeRunning() {} });
+  assert.match(result.errorMessage ?? "", /question sidecar/);
+  h.assertNoOrphan();
+});
+
+it("clears stale transient sidecars before restarting a finished session", (t) => {
+  const h = fakeLaunchEnv(t);
+  for (const suffix of ["done", "exit", "ask"]) writeFileSync(`${h.child}.${suffix}`, "stale");
+  process.env.ISS_FAKE_FAIL_SEND = "1";
+  assert.throws(() => resumeSubagent("test", "follow up", {
+    sessionFile: h.child, sessionId: "old-child",
+  }, h.artifactDir, h.ctx, h.pi, h.map, h.deps), /Failed to resume subagent/);
+  for (const suffix of ["done", "exit", "ask"]) assert.equal(existsSync(`${h.child}.${suffix}`), false);
+  h.assertNoOrphan();
+});
+
+it("preserves valid completion and terminal exit-code fallback", async (t) => {
+  const h = fakeLaunchEnv(t);
+  writeFileSync(`${h.child}.done`, JSON.stringify({ type: "done", timestamp: Date.now() }));
+  assert.deepEqual(await pollForExit("%iss-test", new AbortController().signal, {
+    interval: 1, sessionFile: h.child,
+  }), { reason: "done", exitCode: 0 });
+  createSurface("sentinel-test");
+  process.env.ISS_FAKE_SCREEN = "__SUBAGENT_DONE_7__";
+  assert.deepEqual(await pollForExit("%iss-test", new AbortController().signal, {
+    interval: 1, sessionFile: h.child,
+  }), { reason: "sentinel", exitCode: 7 });
+  closeSurface("%iss-test");
+  h.assertNoOrphan();
+});
+
+it("consumes a question only after successful host delivery", async (t) => {
+  const h = fakeLaunchEnv(t);
+  const surface = createSurface("question-test");
+  writeFileSync(`${h.child}.ask`, JSON.stringify({ question: "Which option?" }));
+  let sent = 0;
+  const pi = {
+    sendMessage(message: { customType: string }) {
+      assert.equal(message.customType, "subagent_question");
+      sent++;
+      writeFileSync(`${h.child}.done`, JSON.stringify({ type: "done" }));
+    },
+  } as unknown as ExtensionAPI;
+  const result = await watchSubagent({
+    id: "question-test", name: "test", task: "test", surface,
+    sessionFile: h.child, startTime: Date.now(),
+  }, new AbortController().signal, { getPi: () => pi, removeRunning() {} });
+  assert.equal(sent, 1);
+  assert.equal(result.exitCode, 0);
+  assert.equal(existsSync(`${h.child}.ask`), false);
   h.assertNoOrphan();
 });

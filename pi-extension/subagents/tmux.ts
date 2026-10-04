@@ -292,7 +292,13 @@ export function interpretExitSidecar(data: unknown): PollResult {
         : "Subagent exited with stopReason=error (no errorMessage in sidecar).";
     return { reason: "error", exitCode: 1, errorMessage };
   }
-  return { reason: "done", exitCode: 0 };
+  if (typeof data === "object" && data !== null && "type" in data && data.type === "done") {
+    return { reason: "done", exitCode: 0 };
+  }
+  return {
+    reason: "error", exitCode: 1,
+    errorMessage: "Invalid subagent completion sidecar: expected type 'done' or 'error'.",
+  };
 }
 
 export const __test__ = {
@@ -302,22 +308,31 @@ export const __test__ = {
 };
 
 function checkSessionSidecars(sessionFile: string): PollResult | null {
-  try {
-    const doneFile = `${sessionFile}.done`;
-    if (existsSync(doneFile)) {
-      rmSync(doneFile, { force: true });
-      return { reason: "done", exitCode: 0 };
+  // An explicit failure must win over a stale or concurrently produced success file.
+  for (const suffix of ["exit", "done"]) {
+    const path = `${sessionFile}.${suffix}`;
+    if (!existsSync(path)) continue;
+    try {
+      const raw = readFileSync(path, "utf8");
+      rmSync(path, { force: true });
+      return interpretExitSidecar(JSON.parse(raw));
+    } catch (error: unknown) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
+      const detail = error instanceof Error ? error.message : String(error);
+      return { reason: "error", exitCode: 1, errorMessage: `Invalid subagent completion sidecar (.${suffix}): ${detail}` };
     }
-    const exitFile = `${sessionFile}.exit`;
-    if (existsSync(exitFile)) {
-      const data: unknown = JSON.parse(readFileSync(exitFile, "utf8"));
-      rmSync(exitFile, { force: true });
-      return interpretExitSidecar(data);
-    }
-  } catch {
-    // Ignore corrupted or partially written sidecar files.
   }
   return null;
+}
+
+function unknownPaneExit(sessionFile?: string): PollResult {
+  // The process may have written a sidecar while the asynchronous liveness probe ran.
+  const completion = sessionFile ? checkSessionSidecars(sessionFile) : null;
+  if (completion) return completion;
+  return {
+    reason: "error", exitCode: 1,
+    errorMessage: "Subagent pane disappeared without completion evidence; exit status is unknown.",
+  };
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -368,7 +383,7 @@ export async function pollForExit(
     // pane fails loudly on the tmux server ("can't find pane: %N") on every
     // cycle, while list-panes targets no pane and stays quiet.
     if (!(await isPaneAliveAsync(surface))) {
-      return { reason: "done", exitCode: 0 };
+      return unknownPaneExit(options.sessionFile);
     }
 
     // Fall back to terminal sentinel output if sidecar files are unavailable.
@@ -379,19 +394,19 @@ export async function pollForExit(
         return { reason: "sentinel", exitCode: parseInt(match[1], 10) };
       }
     } catch (err: unknown) {
-      // tmux errors here mean the pane is gone; treat as a clean exit.
+      // Losing the pane is not proof of a successful process exit.
       const msg = err instanceof Error ? err.message : String(err);
       if (
         msg.includes("can't find pane") ||
         msg.includes("no server running") ||
         !(await isPaneAliveAsync(surface))
       ) {
-        return { reason: "done", exitCode: 0 };
+        return unknownPaneExit(options.sessionFile);
       }
     }
 
     if (!(await isPaneAliveAsync(surface))) {
-      return { reason: "done", exitCode: 0 };
+      return unknownPaneExit(options.sessionFile);
     }
 
     const elapsed = Math.floor((Date.now() - start) / 1000);

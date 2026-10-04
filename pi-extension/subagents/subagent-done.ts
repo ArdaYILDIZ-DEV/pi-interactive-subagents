@@ -15,7 +15,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { rmSync, writeFileSync } from "node:fs";
+import { renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { createSubagentActivityRecorder } from "./activity.ts";
 import { runningChildrenCount } from "./registry.ts";
 import { parseEnvInt } from "./env.ts";
@@ -41,27 +42,33 @@ function parseDeniedTools(rawValue: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function writeSidecar(path: string, payload: unknown): void {
+  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    writeFileSync(temporary, JSON.stringify(payload), { mode: 0o600 });
+    renameSync(temporary, path);
+  } catch (error: unknown) {
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      // Preserve the original write error if temporary-file cleanup also fails.
+    }
+    throw error;
+  }
+}
+
 function writeExitSidecar(
   sessionFile: string,
   errorInfo: { errorMessage: string } | null,
 ): void {
-  try {
-    if (errorInfo) {
-      const exitPayload: ExitSidecarPayload = {
-        type: "error",
-        errorMessage: errorInfo.errorMessage,
-        stopReason: "error",
-      };
-      writeFileSync(`${sessionFile}.exit`, JSON.stringify(exitPayload));
-    } else {
-      const donePayload: DoneSidecarPayload = {
-        type: "done",
-        timestamp: Date.now(),
-      };
-      writeFileSync(`${sessionFile}.done`, JSON.stringify(donePayload));
-    }
-  } catch {
-    // Session directory may be unreachable if the process is being torn down.
+  if (errorInfo) {
+    const exitPayload: ExitSidecarPayload = {
+      type: "error", errorMessage: errorInfo.errorMessage, stopReason: "error",
+    };
+    writeSidecar(`${sessionFile}.exit`, exitPayload);
+  } else {
+    const donePayload: DoneSidecarPayload = { type: "done", timestamp: Date.now() };
+    writeSidecar(`${sessionFile}.done`, donePayload);
   }
 }
 
@@ -158,7 +165,12 @@ export default function (pi: ExtensionAPI) {
       } catch {
         // The stderr diagnostic and nonzero exit remain available if cleanup fails.
       }
-      writeExitSidecar(sessionFile, { errorMessage: message });
+      try {
+        writeExitSidecar(sessionFile, { errorMessage: message });
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error);
+        message += ` Error sidecar could not be written: ${detail}`;
+      }
     }
     process.stderr.write(`Subagent lifecycle error: ${message}\n`);
     try {
@@ -230,7 +242,13 @@ export default function (pi: ExtensionAPI) {
     const errorInfo = findLatestAssistantError(messages);
     const sessionFile = process.env.PI_SUBAGENT_SESSION;
     if (sessionFile) {
-      writeExitSidecar(sessionFile, errorInfo);
+      try {
+        writeExitSidecar(sessionFile, errorInfo);
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error);
+        failAndExit(`Could not write completion sidecar: ${detail}`, ctx);
+        return;
+      }
     }
     recorder.agentEndDone();
     stopHeartbeat();
@@ -335,18 +353,19 @@ export default function (pi: ExtensionAPI) {
           "ask_question is only available in subagent contexts (PI_SUBAGENT_SESSION not set).",
         );
       }
-      awaitingAnswer = true;
-      recorder.askQuestion();
       const askData: AskSidecarPayload = {
         name: process.env.PI_SUBAGENT_NAME ?? "subagent",
         agent: process.env.PI_SUBAGENT_AGENT ?? "",
         question: params.question,
       };
       try {
-        writeFileSync(`${sessionFile}.ask`, JSON.stringify(askData));
-      } catch {
-        // Ignore errors if the orchestrator directory is unreachable.
+        writeSidecar(`${sessionFile}.ask`, askData);
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to send subagent question: ${detail}`);
       }
+      awaitingAnswer = true;
+      recorder.askQuestion();
       return {
         content: [
           {

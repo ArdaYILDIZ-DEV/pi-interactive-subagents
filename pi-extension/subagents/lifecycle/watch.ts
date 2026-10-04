@@ -7,7 +7,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { pollForExit, closeSurface, type AskSidecarPayload } from "../tmux.ts";
+import { pollForExit, closeSurface } from "../tmux.ts";
 import {
   getSessionId,
   getNewEntries,
@@ -60,35 +60,38 @@ function checkAskSidecar(
   pi: ExtensionAPI | null,
 ): void {
   if (!sessionFile || !pi) return;
+  const askFile = `${sessionFile}.ask`;
+  if (!existsSync(askFile)) return;
+  let askData: unknown;
   try {
-    const askFile = `${sessionFile}.ask`;
-    if (!existsSync(askFile)) return;
-
-    const askData = JSON.parse(
-      readFileSync(askFile, "utf8"),
-    ) as AskSidecarPayload;
-    rmSync(askFile, { force: true });
-    if (!askData || typeof askData.question !== "string") return;
-
-    const questionDetails: SubagentQuestionDetails = {
-      name: subagentName,
-      question: askData.question,
-    };
-    pi.sendMessage(
-      {
-        customType: "subagent_question",
-        content:
-          `Sub-agent "${subagentName}" is asking a question:\n\n` +
-          `> ${askData.question}\n\n` +
-          `Reply using: subagent_message({ name: "${subagentName}", message: "..." })`,
-        display: true,
-        details: questionDetails,
-      },
-      { triggerTurn: true, deliverAs: "steer" },
-    );
-  } catch {
-    // The .ask sidecar may be consumed or deleted concurrently; ignore races.
+    askData = JSON.parse(readFileSync(askFile, "utf8"));
+  } catch (error: unknown) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid subagent question sidecar: ${detail}`);
   }
+  if (typeof askData !== "object" || askData === null || !("question" in askData) ||
+      typeof askData.question !== "string") {
+    throw new Error("Invalid subagent question sidecar: expected a string question.");
+  }
+  const questionDetails: SubagentQuestionDetails = {
+    name: subagentName,
+    question: askData.question,
+  };
+  pi.sendMessage(
+    {
+      customType: "subagent_question",
+      content:
+        `Sub-agent "${subagentName}" is asking a question:\n\n` +
+        `> ${askData.question}\n\n` +
+        `Reply using: subagent_message({ name: "${subagentName}", message: "..." })`,
+      display: true,
+      details: questionDetails,
+    },
+    { triggerTurn: true, deliverAs: "steer" },
+  );
+  // Retain the question if host delivery throws so the failure is diagnosable.
+  rmSync(askFile, { force: true });
 }
 
 export async function watchSubagent(

@@ -1,7 +1,7 @@
 import { it } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -55,7 +55,7 @@ function setup(t: TestContext) {
   });
   const messages = [{ role: "assistant", stopReason: "stop" }];
   return {
-    session, emit, messages, exits, diagnostics,
+    dir, session, emit, messages, exits, diagnostics,
     shutdowns: () => shutdowns,
     failShutdown: () => { shutdownError = true; },
     ask: () => askQuestion!("ask-1", { question: "Which option?" }),
@@ -197,4 +197,34 @@ it("exits explicitly when the orderly shutdown request throws", (t) => {
   assert.match(h.diagnostics.join(""), /shutdown failed/);
   t.mock.timers.tick(30000);
   assert.deepEqual(h.exits, [1], "failure must not leave a second safety exit armed");
+});
+
+it("does not claim question delivery or remain waiting after sidecar write failure", async (t) => {
+  const h = setup(t);
+  mkdirSync(`${h.session}.ask`);
+  await assert.rejects(h.ask(), /Failed to send subagent question/);
+  h.emit("agent_end", { messages: h.messages });
+  h.emit("agent_settled");
+  assert.equal(h.shutdowns(), 1, "failed question writes must not leave awaitingAnswer set");
+  assert.equal(readdirSync(h.dir).some((name) => name.includes(".tmp-")), false);
+});
+
+it("reports completion sidecar write failures explicitly and exits nonzero", (t) => {
+  const h = setup(t);
+  rmSync(h.dir, { recursive: true, force: true });
+  h.emit("agent_end", { messages: h.messages });
+  h.emit("agent_settled");
+  assert.deepEqual(h.exits, [1]);
+  assert.match(h.diagnostics.join(""), /completion sidecar/);
+});
+
+it("writes complete question and completion payloads without leftover temporary files", async (t) => {
+  const h = setup(t);
+  await h.ask();
+  assert.equal(JSON.parse(readFileSync(`${h.session}.ask`, "utf8")).question, "Which option?");
+  h.emit("input");
+  h.emit("agent_end", { messages: h.messages });
+  h.emit("agent_settled");
+  assert.equal(JSON.parse(readFileSync(`${h.session}.done`, "utf8")).type, "done");
+  assert.equal(readdirSync(h.dir).some((name) => name.includes(".tmp-")), false);
 });

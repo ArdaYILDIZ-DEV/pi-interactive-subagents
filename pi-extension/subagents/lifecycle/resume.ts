@@ -7,7 +7,7 @@
  * `index.ts`; callers inject it via deps.
  */
 import { dirname, join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { closeSurface, createSurface, sendLongCommand, shellEscape } from "../tmux.ts";
 import {
@@ -110,6 +110,8 @@ export function resumeSubagent(
     artifactDir, "subagent-scripts", `${safeName}-resume-${Date.now()}.sh`,
   );
   assertLaunchActive(control);
+  // A resumed run must not inherit completion or question signals from its predecessor.
+  for (const suffix of ["done", "exit", "ask"]) rmSync(`${sessionPath}.${suffix}`, { force: true });
   const surface = createSurface(name);
   let running: RunningSubagent | undefined;
   try {
