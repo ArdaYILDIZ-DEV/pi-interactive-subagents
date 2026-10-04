@@ -331,3 +331,15 @@ describe("loadout snapshot validation", () => {
     assert.notEqual(readSubagentLoadout(f), null);
   });
 });
+
+it("does not overwrite an existing session while seeding a fresh child", (t) => {
+  const d = tmp();
+  t.after(() => rmSync(d, { recursive: true, force: true }));
+  const child = join(d, "existing.jsonl");
+  const original = JSON.stringify({ type: "session", version: 1, id: "preserve-me" }) + "\n";
+  writeFileSync(child, original);
+  assert.throws(() => seedSubagentSessionFile({
+    parentSessionFile: join(d, "parent.jsonl"), childSessionFile: child, childCwd: d,
+  }), /EEXIST/);
+  assert.equal(readFileSync(child, "utf8"), original);
+});

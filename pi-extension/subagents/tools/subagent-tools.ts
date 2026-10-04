@@ -28,7 +28,8 @@ import {
   resolveNameInRegistry,
 } from "../session.ts";
 import { getArtifactDir } from "../lifecycle/seed.ts";
-import { launchSubagent, type LaunchContext } from "../lifecycle/launch.ts";
+import { launchSubagent } from "../lifecycle/launch.ts";
+import { readPiParentSession } from "../pi-compat.ts";
 import { resumeSubagent } from "../lifecycle/resume.ts";
 import { handleSubagentSteer } from "../lifecycle/steer.ts";
 import {
@@ -199,7 +200,8 @@ export function registerSubagentTool(
         };
       }
 
-      const sessionFile = ctx.sessionManager.getSessionFile();
+      const parent = readPiParentSession(ctx);
+      const sessionFile = parent.sessionFile;
       if (!sessionFile) {
         return {
           content: [
@@ -212,10 +214,7 @@ export function registerSubagentTool(
         };
       }
 
-      const parentArtifactDir = getArtifactDir(
-        ctx.sessionManager.getSessionDir(),
-        ctx.sessionManager.getSessionId(),
-      );
+      const parentArtifactDir = getArtifactDir(parent.sessionDir, parent.sessionId);
 
       let reservedName: string | null = null;
       const requestedName = params.name?.trim();
@@ -234,7 +233,7 @@ export function registerSubagentTool(
       try {
         running = await launchSubagent(
           params,
-          ctx as LaunchContext,
+          ctx,
           deps.runningSubagents,
           {
             signal: AbortSignal.any([_signal, deps.signal].filter(
@@ -447,10 +446,8 @@ export function registerSubagentMessageTool(
         };
       }
 
-      const parentArtifactDir = getArtifactDir(
-        ctx.sessionManager.getSessionDir(),
-        ctx.sessionManager.getSessionId(),
-      );
+      const parent = readPiParentSession(ctx);
+      const parentArtifactDir = getArtifactDir(parent.sessionDir, parent.sessionId);
       const entry = resolveNameInRegistry(parentArtifactDir, requestedName);
       if (!entry) {
         const known = Object.keys(readNameRegistry(parentArtifactDir));
@@ -486,7 +483,7 @@ export function registerSubagentMessageTool(
         params.message,
         entry,
         parentArtifactDir,
-        ctx as LaunchContext,
+        ctx,
         pi,
         deps.runningSubagents,
         { updateWidget: deps.updateWidget, getPi: deps.getPi },

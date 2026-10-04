@@ -34,6 +34,7 @@ import {
 import { assertLaunchActive, type LaunchContext, type LaunchControl } from "./launch.ts";
 import type { RunningSubagent } from "../index.ts";
 import type { SubagentMessageDetails } from "../index.ts";
+import { readPiParentSession } from "../pi-compat.ts";
 
 /**
  * Relaunches a finished session under its registered name with an optional
@@ -81,11 +82,8 @@ export function resumeSubagent(
   const id = Math.random().toString(16).slice(2, 10);
   const startTime = Date.now();
   const resumedSessionId = entry.sessionId ?? getSessionId(sessionPath) ?? name;
-  const sessionId = ctx.sessionManager.getSessionId();
-  const artifactDir = getArtifactDir(
-    ctx.sessionManager.getSessionDir(),
-    sessionId,
-  );
+  const parent = readPiParentSession(ctx);
+  const artifactDir = getArtifactDir(parent.sessionDir, parent.sessionId);
   const activityFile = getSubagentActivityFile(artifactDir, id);
   mkdirSync(dirname(activityFile), { recursive: true });
 

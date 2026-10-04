@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 export interface SessionEntry {
   type: string;
   id: string;
-  parentId?: string;
+  parentId?: string | null;
   [key: string]: unknown;
 }
 
@@ -112,9 +112,14 @@ export function seedSubagentSessionFile(params: {
   parentSessionFile: string;
   childSessionFile: string;
   childCwd: string;
+  header?: {
+    type: "session"; version?: number; id: string; timestamp: string;
+    cwd: string; parentSession?: string;
+  };
 }): void {
   if (hasNullByte(params.childSessionFile) || hasNullByte(params.parentSessionFile)) return;
-  const header = {
+  // Retain the v3 seed for legacy callers; runtime launches supply a public SDK header.
+  const header = params.header ?? {
     type: "session",
     version: 3,
     id: randomUUID(),
@@ -123,7 +128,7 @@ export function seedSubagentSessionFile(params: {
     parentSession: params.parentSessionFile,
   };
   mkdirSync(dirname(params.childSessionFile), { recursive: true });
-  writeFileSync(params.childSessionFile, JSON.stringify(header) + "\n", "utf8");
+  writeFileSync(params.childSessionFile, JSON.stringify(header) + "\n", { encoding: "utf8", flag: "wx" });
 }
 
 // ── Loadout snapshot ──

@@ -228,3 +228,34 @@ it("writes complete question and completion payloads without leftover temporary 
   assert.equal(JSON.parse(readFileSync(`${h.session}.done`, "utf8")).type, "done");
   assert.equal(readdirSync(h.dir).some((name) => name.includes(".tmp-")), false);
 });
+
+it("reports missing child APIs at startup and exits instead of hanging", (t) => {
+  const h = setup(t);
+  registerDone({} as ExtensionAPI);
+  assert.deepEqual(h.exits, [1]);
+  const error = JSON.parse(readFileSync(`${h.session}.exit`, "utf8"));
+  assert.match(error.errorMessage, /ExtensionAPI\.on/);
+  assert.match(h.diagnostics.join(""), /startup failed/);
+});
+
+it("degrades missing UI helpers without disabling completion supervision", (t) => {
+  const h = setup(t);
+  const handlers = new Map<string, Handler>();
+  registerDone({
+    on(name: string, handler: Handler) { handlers.set(name, handler); },
+    registerTool() {},
+  } as unknown as ExtensionAPI);
+  let shutdowns = 0;
+  const ctx = {
+    hasUI: true, mode: "rpc",
+    ui: { setWidget() { throw new Error("terminal widgets are not supported in RPC"); } },
+    shutdown() { shutdowns++; handlers.get("session_shutdown")!({}, ctx); },
+  };
+  handlers.get("session_start")!({}, ctx);
+  handlers.get("agent_end")!({ messages: h.messages }, ctx);
+  handlers.get("agent_settled")!({}, ctx);
+  assert.equal(shutdowns, 1);
+  assert.equal(JSON.parse(readFileSync(`${h.session}.done`, "utf8")).type, "done");
+  assert.match(h.diagnostics.join(""), /UI helpers are unavailable/);
+  assert.deepEqual(h.exits, []);
+});

@@ -22,7 +22,6 @@ import { parseEnvInt } from "../env.ts";
 import { loadAgentDefaults } from "../agents/discovery.ts";
 import {
   getArtifactDir,
-  getDefaultSessionDirFor,
   resolveSubagentPaths,
   composeSubagentTask,
   buildSkillPromptArgs,
@@ -35,15 +34,9 @@ import {
   buildSubagentCommand,
 } from "../cli/args.ts";
 import type { RunningSubagent } from "../index.ts";
+import { createPiSubagentSession, readPiParentSession, type PiSessionContext } from "../pi-compat.ts";
 
-export interface LaunchContext {
-  sessionManager: {
-    getSessionFile(): string | null;
-    getSessionId(): string;
-    getSessionDir(): string;
-  };
-  cwd: string;
-}
+export type LaunchContext = PiSessionContext;
 
 /** Cancellation and runtime-liveness controls for an in-flight launch. */
 export interface LaunchControl {
@@ -122,29 +115,18 @@ export async function launchSubagent(
   const effectiveAutoExit = agentDefs?.autoExit ?? true;
   const effectiveInteractive = agentDefs?.interactive ?? !effectiveAutoExit;
 
-  const sessionFile = ctx.sessionManager.getSessionFile();
+  const parent = readPiParentSession(ctx);
+  const sessionFile = parent.sessionFile;
   if (!sessionFile) throw new Error("No session file");
-  const sessionId = ctx.sessionManager.getSessionId();
-  const artifactDir = getArtifactDir(
-    ctx.sessionManager.getSessionDir(),
-    sessionId,
-  );
+  const artifactDir = getArtifactDir(parent.sessionDir, parent.sessionId);
 
   const { effectiveCwd, effectiveAgentDir } = resolveSubagentPaths(
     params,
     agentDefs,
   );
-  const targetCwd = effectiveCwd ?? ctx.cwd;
-  const sessionDir = getDefaultSessionDirFor(targetCwd, effectiveAgentDir);
-
-  const timestamp =
-    new Date().toISOString().replace(/[:.]/g, "-").slice(0, 23) + "Z";
-  const uuid = [
-    id,
-    Math.random().toString(16).slice(2, 10),
-    Math.random().toString(16).slice(2, 10),
-  ].join("-");
-  const subagentSessionFile = join(sessionDir, `${timestamp}_${uuid}.jsonl`);
+  const targetCwd = effectiveCwd ?? parent.cwd;
+  const child = createPiSubagentSession(targetCwd, effectiveAgentDir, sessionFile);
+  const subagentSessionFile = child.sessionFile;
 
   const effectiveName = params.name?.trim() || params.agent || "subagent";
   params.name = effectiveName;
@@ -154,6 +136,7 @@ export async function launchSubagent(
     parentSessionFile: sessionFile,
     childSessionFile: subagentSessionFile,
     childCwd: targetCwd,
+    header: child.header,
   });
 
   const activityFile = getSubagentActivityFile(artifactDir, id);

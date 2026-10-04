@@ -147,6 +147,7 @@ it("makes runtime shutdown idempotent before watcher microtasks run", async (t) 
   const pi = {
     on(name: string, handler: (event: unknown, ctx: unknown) => void) { handlers.set(name, handler); },
     registerTool() {}, registerCommand() {}, registerMessageRenderer() {},
+    sendUserMessage() {},
     sendMessage() { sent++; },
   } as unknown as ExtensionAPI;
   subagentsExtension(pi);
@@ -367,6 +368,7 @@ it("cancels pending tmux layout work when the runtime shuts down", (t) => {
   const pi = {
     on(name: string, handler: (event: unknown, ctx: unknown) => void) { handlers.set(name, handler); },
     registerTool() {}, registerCommand() {}, registerMessageRenderer() {},
+    sendMessage() {}, sendUserMessage() {},
   } as unknown as ExtensionAPI;
   subagentsExtension(pi);
   createSurface("timer-test");
@@ -391,6 +393,7 @@ it("aborts an in-flight spawn when the extension runtime shuts down", async (t) 
     on(name: string, handler: (event: unknown, ctx: unknown) => void) { handlers.set(name, handler); },
     registerTool(tool: { name: string; execute: Execute }) { tools.set(tool.name, tool.execute); },
     registerCommand() {}, registerMessageRenderer() {},
+    sendMessage() {}, sendUserMessage() {},
   } as unknown as ExtensionAPI;
   subagentsExtension(pi);
   const pending = tools.get("subagent")!("spawn-1", { agent: "test", task: "test" }, undefined, undefined, h.ctx);

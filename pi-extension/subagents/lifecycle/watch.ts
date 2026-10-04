@@ -9,8 +9,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { pollForExit, closeSurface } from "../tmux.ts";
 import {
-  getSessionId,
-  getNewEntries,
   findLastAssistantMessage,
   summarizeSessionStats,
   type SessionEntry,
@@ -20,6 +18,7 @@ import {
   type SubagentActivityState,
 } from "../activity.ts";
 import { parseEnvInt } from "../env.ts";
+import { readPiSessionSnapshot } from "../pi-compat.ts";
 import type { SubagentResult } from "../tui/widgets.ts";
 
 export interface SubagentQuestionDetails {
@@ -117,11 +116,14 @@ export async function watchSubagent(
     const hasSession = existsSync(sessionFile);
     let summary: string;
     let allEntries: SessionEntry[] | null = null;
+    let subagentSessionId: string | null = null;
 
     if (hasSession) {
-      allEntries = getNewEntries(sessionFile, 0);
+      const snapshot = readPiSessionSnapshot(sessionFile);
+      allEntries = snapshot.entries;
+      subagentSessionId = snapshot.sessionId;
       summary =
-        findLastAssistantMessage(allEntries) ??
+        findLastAssistantMessage(snapshot.branch) ??
         (result.errorMessage
           ? `Subagent error: ${result.errorMessage}`
           : result.exitCode === 0
@@ -140,12 +142,6 @@ export async function watchSubagent(
       : hasSession
         ? summarizeSessionStats(sessionFile)
         : null;
-    const subagentSessionId = hasSession
-      ? allEntries?.[0]?.type === "session" &&
-        typeof allEntries[0]?.id === "string"
-        ? (allEntries[0].id as string)
-        : getSessionId(sessionFile)
-      : null;
 
     try {
       closeSurface(surface, deps.getPi() !== null);

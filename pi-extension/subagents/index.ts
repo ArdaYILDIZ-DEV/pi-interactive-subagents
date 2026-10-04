@@ -16,6 +16,7 @@ import { closeSurface, stopSurfaceTimers } from "./tmux.ts";
 import type { SubagentActivityState } from "./activity.ts";
 
 import { publishRunningChildrenCount } from "./registry.ts";
+import { assertPiExtensionApi } from "./pi-compat.ts";
 
 // ── Agent discovery (re-exported; implementation lives in ./agents/discovery.ts) ──
 export {
@@ -87,6 +88,7 @@ const runningSubagents = new Map<string, RunningSubagent>();
 
 let latestCtx: ExtensionContext | null = null;
 let latestPi: ExtensionAPI | null = null;
+let widgetWarningShown = false;
 
 publishRunningChildrenCount(() => runningSubagents.size);
 
@@ -115,7 +117,12 @@ import { registerSubagentMessageRenderers } from "./tui/message-renderers.ts";
  * nothing runs, and stays silent without UI so headless sessions never crash.
  */
 function updateWidget(): void {
-  if (!latestCtx?.hasUI) return;
+  if (!latestCtx?.hasUI || latestCtx.mode !== "tui") return;
+  if (typeof latestCtx.ui?.setWidget !== "function") {
+    if (!widgetWarningShown) process.stderr.write("Subagent status widget unavailable: missing ui.setWidget().\n");
+    widgetWarningShown = true;
+    return;
+  }
   if (runningSubagents.size === 0) {
     latestCtx.ui.setWidget("subagent-status", undefined);
     return;
@@ -190,11 +197,15 @@ import {
  * @param pi Extension host for tools, commands, events, and messages.
  */
 export default function subagentsExtension(pi: ExtensionAPI) {
+  assertPiExtensionApi(pi, "orchestrator");
   const runtimeAbort = new AbortController();
   latestPi = pi;
 
   pi.on("session_start", (_event, ctx) => {
-    if (latestPi === pi) latestCtx = ctx;
+    if (latestPi === pi) {
+      latestCtx = ctx;
+      widgetWarningShown = false;
+    }
   });
 
   pi.on("session_shutdown", (_event, _ctx) => {

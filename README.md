@@ -177,6 +177,22 @@ Runtime schemas import the public host-provided `typebox` package, not Pi's
 legacy `@sinclair/typebox` loader alias. Host packages remain peer dependencies
 and are not bundled with the extension.
 
+Runtime child headers, filenames, and cwd-specific session directories come
+from the public `SessionManager` API. Because Pi persists new sessions lazily,
+the extension exclusively creates the generated header file before spawning;
+it never overwrites an existing session while seeding a child. The dependency-free
+legacy seed/path helpers remain available for existing callers (including their
+v3 header fallback); runtime launches do not use that fallback.
+
+Completed sessions are restored through `SessionManager.inMemory`, including
+Pi's legacy migration, without rewriting the source file. Regression fixtures
+cover versionless and v1/v2/v3 sessions; summaries use the public active branch.
+Unsupported host versions, missing required public methods, invalid context
+returns, and unsupported session versions produce explicit compatibility errors.
+When child startup capability checks fail, the child writes an error sidecar
+and exits nonzero. Optional UI helpers degrade with diagnostics; terminal
+widgets are limited to TUI mode.
+
 ### Installation
 
 Pi automatically discovers extensions in `~/.pi/agent/extensions/<package-name>/` via the `"pi": { "extensions": [...] }` manifest in `package.json`.

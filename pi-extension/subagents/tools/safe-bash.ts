@@ -8,8 +8,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { isDangerous } from "./dangerous.ts";
+import { assertPiExtensionApi } from "../pi-compat.ts";
 
 export default function (pi: ExtensionAPI) {
+  assertPiExtensionApi(pi, "safe_bash");
   const bashTool = createBashTool(process.cwd());
 
   pi.registerTool({

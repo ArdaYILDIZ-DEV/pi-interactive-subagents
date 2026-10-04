@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { createSubagentActivityRecorder } from "./activity.ts";
 import { runningChildrenCount } from "./registry.ts";
 import { parseEnvInt } from "./env.ts";
+import { assertPiExtensionApi } from "./pi-compat.ts";
 import type {
   AskSidecarPayload,
   DoneSidecarPayload,
@@ -79,9 +80,28 @@ function writeExitSidecar(
  * @param pi Child session extension host.
  */
 export default function (pi: ExtensionAPI) {
+  try {
+    assertPiExtensionApi(pi, "child");
+  } catch (error: unknown) {
+    const sessionFile = process.env.PI_SUBAGENT_SESSION;
+    if (!sessionFile) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Subagent startup failed: ${detail}\n`);
+    try {
+      writeExitSidecar(sessionFile, { errorMessage: detail });
+    } catch (writeError: unknown) {
+      process.stderr.write(`Subagent startup error sidecar failed: ${String(writeError)}\n`);
+    }
+    process.exit(1);
+    return;
+  }
+  if (typeof pi.registerShortcut !== "function" || typeof pi.getAllTools !== "function") {
+    process.stderr.write("Subagent UI helpers are unavailable; tools and completion supervision remain enabled.\n");
+  }
   let toolNames: string[] = [];
   let denied: string[] = [];
   let expanded = false;
+  let widgetWarningShown = false;
 
   const subagentName = process.env.PI_SUBAGENT_NAME ?? "";
   const subagentAgent = process.env.PI_SUBAGENT_AGENT ?? "";
@@ -90,7 +110,13 @@ export default function (pi: ExtensionAPI) {
     activityFile: process.env.PI_SUBAGENT_ACTIVITY_FILE,
   });
 
-  function renderWidget(ctx: Pick<ExtensionContext, "ui">) {
+  function renderWidget(ctx: ExtensionContext) {
+    if (!ctx.hasUI || ctx.mode !== "tui") return;
+    if (typeof ctx.ui?.setWidget !== "function") {
+      if (!widgetWarningShown) process.stderr.write("Subagent tools widget unavailable: missing ui.setWidget().\n");
+      widgetWarningShown = true;
+      return;
+    }
     ctx.ui.setWidget(
       "subagent-tools",
       (_tui: TUI, theme: Theme) => {
@@ -267,10 +293,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     recorder.sessionStart();
     startHeartbeat();
-    toolNames = pi
-      .getAllTools()
-      .map((t) => t.name)
-      .sort();
+    try {
+      const tools: unknown = typeof pi.getAllTools === "function" ? pi.getAllTools() : [];
+      if (!Array.isArray(tools) || tools.some((tool) => !tool || typeof tool.name !== "string")) {
+        throw new Error("Pi getAllTools returned an invalid tool list");
+      }
+      toolNames = tools.map((tool) => tool.name).sort();
+    } catch (error: unknown) {
+      toolNames = [];
+      process.stderr.write(`Subagent tool listing disabled: ${String(error)}\n`);
+    }
     denied = parseDeniedTools(process.env.PI_DENY_TOOLS);
     renderWidget(ctx);
   });
@@ -327,13 +359,15 @@ export default function (pi: ExtensionAPI) {
     handleExit(lastSeenMessages, ctx);
   });
 
-  pi.registerShortcut("ctrl+alt+o", {
-    description: "Toggle subagent tools widget",
-    handler: (ctx) => {
-      expanded = !expanded;
-      renderWidget(ctx);
-    },
-  });
+  if (typeof pi.registerShortcut === "function") {
+    pi.registerShortcut("ctrl+alt+o", {
+      description: "Toggle subagent tools widget",
+      handler: (ctx) => {
+        expanded = !expanded;
+        renderWidget(ctx);
+      },
+    });
+  }
 
   pi.registerTool({
     name: "ask_question",
