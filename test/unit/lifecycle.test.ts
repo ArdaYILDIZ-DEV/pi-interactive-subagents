@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import subagentsExtension, { type RunningSubagent } from "../../pi-extension/subagents/index.ts";
 import { attachSubagentWatcher, stopDispatcherTimers } from "../../pi-extension/subagents/lifecycle/dispatcher.ts";
+import { resumeSubagent } from "../../pi-extension/subagents/lifecycle/resume.ts";
+import type { LaunchContext } from "../../pi-extension/subagents/lifecycle/launch.ts";
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -194,4 +196,27 @@ it("contains widget failures without retrying the callback or delivery", async (
   assert.equal(refreshed, 1);
   assert.equal(completed, 1);
   assert.match(diagnostics.join(""), /disposed widget/);
+});
+
+it("refuses invalid resume snapshots before touching session APIs or panes", (t) => {
+  const { running } = completedChild(t);
+  writeFileSync(`${running.sessionFile}.loadout.json`, "{}");
+  const ctx: LaunchContext = {
+    cwd: "/tmp",
+    sessionManager: {
+      getSessionId() { throw new Error("must not touch session API"); },
+      getSessionDir() { throw new Error("must not touch session API"); },
+      getSessionFile() { throw new Error("must not touch session API"); },
+    },
+  };
+  const map = new Map<string, RunningSubagent>();
+  const result = resumeSubagent("worker", "next task", {
+    sessionFile: running.sessionFile, sessionId: "child-id",
+  }, "unused", ctx, {} as ExtensionAPI, map, {
+    getPi: () => null,
+    updateWidget() { throw new Error("must not refresh widgets"); },
+  });
+  assert.match(result.details.error ?? "", /snapshot is missing or invalid/);
+  assert.match(result.content[0].text, /restrictions cannot be verified/);
+  assert.equal(map.size, 0);
 });

@@ -263,3 +263,71 @@ describe("session.ts", () => {
     assert.equal(summarizeSessionStats("/tmp/\0evil.jsonl"), null);
   });
 });
+
+describe("loadout snapshot validation", () => {
+  const unrestricted: SubagentLoadout = {
+    agent: null, toolAllowlist: null, model: null, thinking: null,
+    systemPromptMode: null, identity: null, spawnable: null,
+    autoExit: false, cwd: null, agentDir: null,
+  };
+
+  it("rejects empty objects and every missing required field", (t) => {
+    const d = tmp();
+    t.after(() => rmSync(d, { recursive: true, force: true }));
+    const f = join(d, "snapshot.jsonl");
+    const candidates: Record<string, unknown>[] = [{}];
+    for (const key of Object.keys(unrestricted)) {
+      const incomplete: Record<string, unknown> = { ...unrestricted };
+      delete incomplete[key];
+      candidates.push(incomplete);
+    }
+    for (const value of candidates) {
+      writeFileSync(loadoutSidecarPath(f), JSON.stringify(value));
+      assert.equal(readSubagentLoadout(f), null, `accepted incomplete snapshot: ${JSON.stringify(value)}`);
+    }
+  });
+
+  it("rejects malformed nullable values and sandbox control fields", (t) => {
+    const d = tmp();
+    t.after(() => rmSync(d, { recursive: true, force: true }));
+    const f = join(d, "snapshot.jsonl");
+    const changes = [
+      { agent: 7 }, { toolAllowlist: [] }, { toolAllowlist: "" },
+      { toolAllowlist: "read,,write" }, { model: {} }, { thinking: false },
+      { systemPromptMode: "unknown" }, { identity: [] },
+      { spawnable: "worker" }, { spawnable: ["worker", 7] },
+      { spawnable: [""] }, { autoExit: "false" }, { autoExit: null },
+      { cwd: 42 }, { cwd: "/tmp/\u0000unsafe" }, { agentDir: false },
+    ];
+    for (const change of changes) {
+      writeFileSync(loadoutSidecarPath(f), JSON.stringify({ ...unrestricted, ...change }));
+      assert.equal(readSubagentLoadout(f), null, `accepted malformed snapshot: ${JSON.stringify(change)}`);
+    }
+  });
+
+  it("preserves valid historical unrestricted and restricted snapshots", (t) => {
+    const d = tmp();
+    t.after(() => rmSync(d, { recursive: true, force: true }));
+    const f = join(d, "snapshot.jsonl");
+    const restricted: SubagentLoadout = {
+      ...unrestricted, agent: "worker", toolAllowlist: "read,safe_bash,ask_question",
+      spawnable: ["scout"], model: "provider/model", thinking: "high",
+      systemPromptMode: "append", identity: "Existing identity\nwith multiple lines.",
+      autoExit: true, cwd: "/tmp/project", agentDir: "/tmp/agent",
+    };
+    for (const original of [unrestricted, restricted]) {
+      const raw = JSON.stringify(original);
+      writeFileSync(loadoutSidecarPath(f), raw);
+      assert.deepEqual(readSubagentLoadout(f), original);
+      assert.equal(readFileSync(loadoutSidecarPath(f), "utf8"), raw, "reading must not rewrite legacy snapshots");
+    }
+  });
+
+  it("tolerates additional snapshot fields without accepting missing controls", (t) => {
+    const d = tmp();
+    t.after(() => rmSync(d, { recursive: true, force: true }));
+    const f = join(d, "snapshot.jsonl");
+    writeFileSync(loadoutSidecarPath(f), JSON.stringify({ ...unrestricted, futureMetadata: "allowed" }));
+    assert.notEqual(readSubagentLoadout(f), null);
+  });
+});

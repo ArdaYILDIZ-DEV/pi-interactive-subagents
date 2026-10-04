@@ -142,14 +142,35 @@ export function writeSubagentLoadout(sessionFile: string, loadout: SubagentLoado
   }
 }
 
+function isSubagentLoadout(value: unknown): value is SubagentLoadout {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const nullableStringFields = [
+    "agent", "toolAllowlist", "model", "thinking", "identity", "cwd", "agentDir",
+  ];
+  for (const key of nullableStringFields) {
+    const field = record[key];
+    if (field !== null && (typeof field !== "string" || field.includes("\0"))) return false;
+    if (typeof field === "string" && key !== "identity" && !field.trim()) return false;
+  }
+  if (typeof record.toolAllowlist === "string" &&
+      record.toolAllowlist.split(",").some((name) => !name.trim())) return false;
+  if (record.systemPromptMode !== null && record.systemPromptMode !== "append" &&
+      record.systemPromptMode !== "replace") return false;
+  if (typeof record.autoExit !== "boolean") return false;
+  const spawnable = record.spawnable;
+  return spawnable === null || (Array.isArray(spawnable) && spawnable.every(
+    (name: unknown) => typeof name === "string" && name.trim().length > 0 && !name.includes("\0"),
+  ));
+}
+
 export function readSubagentLoadout(sessionFile: string): SubagentLoadout | null {
   if (hasNullByte(sessionFile)) return null;
   try {
     const sidecarPath = loadoutSidecarPath(sessionFile);
     if (!existsSync(sidecarPath)) return null;
     const parsed = JSON.parse(readFileSync(sidecarPath, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    return parsed as SubagentLoadout;
+    return isSubagentLoadout(parsed) ? parsed : null;
   } catch {
     return null;
   }

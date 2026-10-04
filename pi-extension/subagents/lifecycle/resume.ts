@@ -66,8 +66,9 @@ export function resumeSubagent(
   const loadout = readSubagentLoadout(sessionPath);
   if (!loadout) {
     const err =
-      `Cannot safely resume "${name}": no sandbox snapshot found. Resuming would relaunch with all ` +
-      `global extensions and the full toolset, so this is refused. Re-run the task as a fresh subagent.`;
+      `Cannot safely resume "${name}": sandbox snapshot is missing or invalid. ` +
+      `The original tool and spawn restrictions cannot be verified, so resuming is refused. ` +
+      `Re-run the task as a fresh subagent.`;
     return {
       content: [{ type: "text" as const, text: err }],
       details: { error: err },
