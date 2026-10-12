@@ -5,6 +5,7 @@
  * Tool access is controlled via `--tools <allowlist>` when specified by the agent.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { shellEscape } from "./tmux.ts";
 import type { SubagentLoadout } from "./session.ts";
@@ -84,7 +85,7 @@ export function applySandboxToParts(
     const spSafeName = sanitizeSubagentName(opts.name, "subagent");
     const spPath = join(
       opts.artifactDir,
-      `context/${spSafeName}-sysprompt-${spTimestamp}.md`,
+      `context/${spSafeName}-sysprompt-${spTimestamp}-${randomUUID()}.md`,
     );
     mkdirSync(dirname(spPath), { recursive: true });
     writeFileSync(spPath, loadout.identity, "utf8");

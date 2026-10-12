@@ -233,6 +233,10 @@ tmux new -A -s pi 'pi'
 
 ## Notable fixes & improvements
 
+- **Launch metadata cannot escape shell comments.** Newlines in display names or other script-header metadata are flattened before writing the generated shell script.
+- **Collision-resistant prompt artifacts.** Task, follow-up, and system-prompt filenames include UUIDs so different names that normalize to the same slug cannot overwrite each other's instructions within one timestamp.
+- **Explicit initial lifecycle and cwd.** `auto-exit: false` is passed as an explicit child environment opt-out. New launches pin the effective cwd in both the command and resume snapshot, including when cwd defaults to the parent. Historical snapshots with `cwd: null` are not migrated by this change.
+
 - **Instant automatic pane destruction.** The child shell executes with exit trapping; upon turn completion, a `.done` sidecar triggers immediate pane teardown (`kill-pane`) so terminal splits never linger after subagents finish.
 - **Bi-directional `ask_question` support.** Subagents can call `ask_question` to pause and request clarification from the orchestrator. Questions are rendered into an interactive alert and can be replied to via `subagent_message`.
 - **Full extension discovery & flexible tool allowlisting.** Subagents inherit all installed Pi extensions without `--no-extensions` lockout, while tool access is governed strictly by the frontmatter `tools` field.

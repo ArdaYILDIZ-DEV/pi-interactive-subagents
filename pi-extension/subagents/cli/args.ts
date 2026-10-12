@@ -48,7 +48,8 @@ export function buildSubagentEnv(opts: SubagentEnvOptions): string[] {
     );
   envParts.push(`PI_SUBAGENT_SURFACE=${shellEscape(opts.surface)}`);
   if (opts.agent) envParts.push(`PI_SUBAGENT_AGENT=${shellEscape(opts.agent)}`);
-  if (opts.autoExit) envParts.push(`PI_SUBAGENT_AUTO_EXIT=1`);
+  // Pin both values: an absent variable makes the child default to auto-exit.
+  envParts.push(`PI_SUBAGENT_AUTO_EXIT=${opts.autoExit === false ? "0" : "1"}`);
   return envParts;
 }
 
@@ -60,11 +61,13 @@ export function buildScriptPreamble(
   timestamp?: string,
 ): string {
   const ts = timestamp ?? new Date().toISOString();
+  // Metadata is untrusted; a newline must never escape a shell comment.
+  const oneLine = (value: string) => value.replace(/[\r\n\0]/g, " ");
   return [
-    `# Subagent ${action} script for ${name}`,
-    `# Generated: ${ts}`,
-    `# Session: ${sessionFile}`,
-    `# Surface: ${surface}`,
+    `# Subagent ${action} script for ${oneLine(name)}`,
+    `# Generated: ${oneLine(ts)}`,
+    `# Session: ${oneLine(sessionFile)}`,
+    `# Surface: ${oneLine(surface)}`,
   ].join("\n");
 }
 

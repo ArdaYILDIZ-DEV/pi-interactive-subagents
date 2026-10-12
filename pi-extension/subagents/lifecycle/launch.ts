@@ -159,7 +159,7 @@ export async function launchSubagent(
     identity: identityInSystemPrompt ? identity : null,
     spawnable: agentDefs?.subagentAgents ?? null,
     autoExit: effectiveAutoExit,
-    cwd: effectiveCwd ?? null,
+    cwd: targetCwd,
     agentDir: effectiveAgentDir,
   };
   writeSubagentLoadout(subagentSessionFile, loadout);
@@ -203,7 +203,7 @@ export async function launchSubagent(
     });
 
     const command = buildSubagentCommand({
-      cwd: effectiveCwd,
+      cwd: targetCwd,
       envParts,
       parts,
     });

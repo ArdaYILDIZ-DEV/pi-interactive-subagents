@@ -184,7 +184,7 @@ You are a test agent. Always verify.`;
       assert.ok(env.includes("PI_SUBAGENT_AUTO_EXIT=1"));
     });
 
-    it("omits PI_SUBAGENT_AUTO_EXIT when autoExit is false", () => {
+    it("disables PI_SUBAGENT_AUTO_EXIT when autoExit is false", () => {
       const env = buildSubagentEnv({
         surface: "%1",
         sessionFile: "/s.jsonl",
@@ -192,7 +192,7 @@ You are a test agent. Always verify.`;
         name: "agent",
         autoExit: false,
       });
-      assert.ok(!env.some((e) => e.includes("PI_SUBAGENT_AUTO_EXIT")));
+      assert.ok(env.includes("PI_SUBAGENT_AUTO_EXIT=0"));
     });
   });
 
@@ -415,4 +415,42 @@ You are a test agent. Always verify.`;
       );
     });
   });
+});
+
+it("explicitly passes auto-exit opt-out rather than inheriting child defaults", () => {
+  const env = buildSubagentEnv({
+    surface: "%1", sessionFile: "/s.jsonl", id: "1", name: "interactive", autoExit: false,
+  });
+  assert.ok(env.includes("PI_SUBAGENT_AUTO_EXIT=0"));
+});
+
+it("keeps untrusted launch metadata inside shell comments", () => {
+  const preamble = buildScriptPreamble("launch", "worker\nprintf injected\n#", "/s\r\nprintf path\n.jsonl", "%1\nprintf pane", "now\nprintf timestamp");
+  assert.ok(preamble.split("\n").every((line) => line.startsWith("# ")));
+  assert.equal(preamble.split("\n").length, 4);
+});
+
+it("does not overwrite task, resume or identity artifacts with colliding names and timestamps", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_700_000_000_000 });
+  const d = mkdtempSync(join(tmpdir(), "iss-collision-"));
+  t.after(() => rmSync(d, { recursive: true, force: true }));
+  for (const writer of [writeTaskArtifact, writeResumeMessageArtifact]) {
+    const first = writer(d, "Review!", "first", "same-time");
+    const second = writer(d, "review", "second", "same-time");
+    assert.notEqual(first, second);
+    assert.equal(readFileSync(first, "utf8"), "first");
+    assert.equal(readFileSync(second, "utf8"), "second");
+  }
+  const loadout: SubagentLoadout = {
+    agent: "scout", toolAllowlist: "read", model: null, thinking: null,
+    systemPromptMode: "append", identity: "first", spawnable: null,
+    autoExit: true, cwd: d, agentDir: d,
+  };
+  const firstParts = buildSubagentCliParts("/first.jsonl", loadout, { artifactDir: d, name: "Review!" });
+  const secondParts = buildSubagentCliParts("/second.jsonl", { ...loadout, identity: "second" }, { artifactDir: d, name: "review" });
+  const first = firstParts[firstParts.indexOf("--append-system-prompt") + 1].slice(1, -1);
+  const second = secondParts[secondParts.indexOf("--append-system-prompt") + 1].slice(1, -1);
+  assert.notEqual(first, second);
+  assert.equal(readFileSync(first, "utf8"), "first");
+  assert.equal(readFileSync(second, "utf8"), "second");
 });

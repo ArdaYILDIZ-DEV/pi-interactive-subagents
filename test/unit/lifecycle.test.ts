@@ -524,3 +524,19 @@ it("consumes a question only after successful host delivery", async (t) => {
   assert.equal(existsSync(`${h.child}.ask`), false);
   h.assertNoOrphan();
 });
+
+it("pins the parent's default cwd in both launch command and resume snapshot", async (t) => {
+  const h = fakeLaunchEnv(t);
+  h.ctx.cwd = join(h.dir, "project");
+  mkdirSync(h.ctx.cwd);
+  const running = await launchSubagent({ task: "inspect", name: "cwd-test" }, h.ctx, h.map);
+  const loadout = JSON.parse(readFileSync(`${running.sessionFile}.loadout.json`, "utf8"));
+  assert.equal(loadout.cwd, h.ctx.cwd);
+  assert.ok(readFileSync(running.launchScriptFile!, "utf8").includes(`cd '${h.ctx.cwd}' &&`));
+  closeSurface(running.surface);
+  h.map.clear();
+  const result = resumeSubagent("cwd-test", "follow up", {
+    sessionFile: running.sessionFile, sessionId: "child",
+  }, h.artifactDir, h.ctx, h.pi, h.map, h.deps);
+  assert.ok(readFileSync(result.details.launchScriptFile!, "utf8").includes(`cd '${h.ctx.cwd}' &&`));
+});

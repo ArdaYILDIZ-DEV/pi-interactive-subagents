@@ -2,6 +2,7 @@
  * Session seed / artifact helpers (extracted from `index.ts` — pure move, no behavior change).
  */
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { sanitizeSubagentName } from "../sandbox.ts";
 import { getAgentConfigDir, type AgentDefaults } from "../agents/discovery.ts";
@@ -81,7 +82,7 @@ export function writeTaskArtifact(
   const taskTimestamp =
     timestamp ?? new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const safeName = sanitizeSubagentName(name, "subagent");
-  const taskPath = join(artifactDir, `context/${safeName}-${taskTimestamp}.md`);
+  const taskPath = join(artifactDir, `context/${safeName}-${taskTimestamp}-${randomUUID()}.md`);
   mkdirSync(dirname(taskPath), { recursive: true });
   writeFileSync(taskPath, fullTask, "utf8");
   return taskPath;
@@ -99,7 +100,7 @@ export function writeResumeMessageArtifact(
   const resumeMsgFile = join(
     artifactDir,
     "subagent-resume",
-    `${safeName}-${msgTimestamp}.md`,
+    `${safeName}-${msgTimestamp}-${randomUUID()}.md`,
   );
   mkdirSync(dirname(resumeMsgFile), { recursive: true });
   writeFileSync(resumeMsgFile, message, "utf8");
