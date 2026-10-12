@@ -11,7 +11,6 @@ import { pollForExit, closeSurface } from "../tmux.ts";
 import {
   findLastAssistantMessage,
   summarizeSessionStats,
-  type SessionEntry,
 } from "../session.ts";
 import {
   readSubagentActivityFile,
@@ -99,11 +98,12 @@ export async function watchSubagent(
   deps: WatchDeps,
 ): Promise<SubagentResult> {
   const { name, task, surface, startTime, sessionFile, agent } = running;
+  const timeoutMs = getWatchTimeoutMs();
   try {
     const result = await pollForExit(surface, signal, {
       interval: 1000,
       sessionFile,
-      ...(getWatchTimeoutMs() ? { timeoutMs: getWatchTimeoutMs() } : {}),
+      ...(timeoutMs ? { timeoutMs } : {}),
       onTick() {
         checkAskSidecar(sessionFile, running.name, deps.getPi());
         if (!running.activityFile) return;
@@ -113,42 +113,14 @@ export async function watchSubagent(
     });
 
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const hasSession = existsSync(sessionFile);
-    let summary: string;
-    let allEntries: SessionEntry[] | null = null;
-    let subagentSessionId: string | null = null;
-
-    if (hasSession) {
-      const snapshot = readPiSessionSnapshot(sessionFile);
-      allEntries = snapshot.entries;
-      subagentSessionId = snapshot.sessionId;
-      summary =
-        findLastAssistantMessage(snapshot.branch) ??
-        (result.errorMessage
-          ? `Subagent error: ${result.errorMessage}`
-          : result.exitCode === 0
-            ? "Sub-agent exited without output"
-            : `Sub-agent exited with code ${result.exitCode}`);
-    } else {
-      summary = result.errorMessage
-        ? `Subagent error: ${result.errorMessage}`
-        : result.exitCode === 0
-          ? "Sub-agent exited without output"
-          : `Sub-agent exited with code ${result.exitCode}`;
-    }
-
-    const stats = allEntries
-      ? summarizeSessionStats(allEntries)
-      : hasSession
-        ? summarizeSessionStats(sessionFile)
-        : null;
-
-    try {
-      closeSurface(surface, deps.getPi() !== null);
-    } catch {
-      // Pane may already be gone if the process exited on its own.
-    }
-    deps.removeRunning(running.id);
+    const snapshot = existsSync(sessionFile) ? readPiSessionSnapshot(sessionFile) : null;
+    const fallback = result.errorMessage
+      ? `Subagent error: ${result.errorMessage}`
+      : result.exitCode === 0
+        ? "Sub-agent exited without output"
+        : `Sub-agent exited with code ${result.exitCode}`;
+    const summary = (snapshot ? findLastAssistantMessage(snapshot.branch) : null) ?? fallback;
+    const stats = snapshot ? summarizeSessionStats(snapshot.entries) : null;
 
     return {
       name,
@@ -156,20 +128,13 @@ export async function watchSubagent(
       agent,
       summary,
       sessionFile,
-      ...(subagentSessionId ? { sessionId: subagentSessionId } : {}),
+      ...(snapshot?.sessionId ? { sessionId: snapshot.sessionId } : {}),
       exitCode: result.exitCode,
       elapsed,
       ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
       ...(stats ? { stats } : {}),
     };
   } catch (err: unknown) {
-    try {
-      closeSurface(surface, deps.getPi() !== null);
-    } catch {
-      // Pane may already be gone if the process exited on its own.
-    }
-    deps.removeRunning(running.id);
-
     const elapsed = Math.floor((Date.now() - startTime) / 1000);
     const msg = err instanceof Error ? err.message : String(err);
     if (signal.aborted) {
@@ -193,5 +158,12 @@ export async function watchSubagent(
       elapsed,
       errorMessage: msg,
     };
+  } finally {
+    try {
+      closeSurface(surface, deps.getPi() !== null);
+    } catch {
+      // Pane may already be gone if the process exited on its own.
+    }
+    deps.removeRunning(running.id);
   }
 }

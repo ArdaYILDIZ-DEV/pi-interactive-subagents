@@ -125,10 +125,9 @@ export function resolveResultPresentation(result: SubagentResult): string {
   const sessionRef = `\n\nFollow up with subagent_message({ name: "${result.name}", message: "…" })`;
   if (result.errorMessage) {
     return (
-      `Sub-agent "${result.name}" failed after ${formatElapsed(result.elapsed)} ` +
-      `(provider/agent error — auto-retry exhausted).\n\nError: ${result.errorMessage}\n\n` +
-      `The subagent did not produce a result. Retry by spawning a new subagent or resume it ` +
-      `with subagent_message.${sessionRef}`
+      `Sub-agent "${result.name}" failed after ${formatElapsed(result.elapsed)}.\n\n` +
+      `Error: ${result.errorMessage}\n\n` +
+      `Partial work may exist. Inspect it before retrying or resuming with subagent_message.${sessionRef}`
     );
   }
   return result.exitCode === 0

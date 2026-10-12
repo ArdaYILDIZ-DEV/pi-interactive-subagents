@@ -1,17 +1,17 @@
 /**
  * Status widget configuration loader and activity state classification.
  *
- * Reads status display preferences with fallback to safe defaults
- * to prevent configuration errors from blocking extension initialization.
+ * Missing or unreadable JSON falls back to defaults; structurally invalid
+ * readable configuration raises an error rather than hiding a mistake.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface StatusConfig {
-  /** Whether the live status widget is shown above the editor. */
+  /** Enable activity supervision and phase labels (not widget visibility). */
   enabled: boolean;
-  /** Maximum number of widget rows rendered per status refresh. */
+  /** Retained compatibility setting; the renderer currently shows all rows. */
   lineLimit: number;
   /** Milliseconds without activity updates before a subagent is shown as stalled. */
   stallAfterMs: number;

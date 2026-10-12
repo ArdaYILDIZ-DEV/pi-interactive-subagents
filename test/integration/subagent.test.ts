@@ -1,15 +1,12 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
 import {
   createTestEnv,
   cleanupTestEnv,
   createTrackedSurface,
   startPi,
   waitForFile,
-  waitForPiExit,
-  waitForScreen,
   isMuxAvailable,
   TEST_MODEL,
 } from "./harness.ts";

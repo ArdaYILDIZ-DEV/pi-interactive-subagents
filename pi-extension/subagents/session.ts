@@ -264,80 +264,44 @@ export function resolveNameInRegistry(
 
 // ── Entry helpers (single-pass line scanning) ──
 
-/**
- * Parses new entries from a session file starting at `afterLine` index.
- * Uses a single-pass index scanner over the file buffer to avoid intermediate
- * full-file string array allocations (`raw.split('\n')`).
- */
+/** Stream parseable JSON lines; offsets count nonblank lines, including malformed ones. */
+function* parsedSessionLines(raw: string, afterLine = 0): Generator<unknown> {
+  let lineStart = 0;
+  let nonBlankIndex = 0;
+  while (lineStart < raw.length) {
+    let lineEnd = raw.indexOf("\n", lineStart);
+    if (lineEnd === -1) lineEnd = raw.length;
+    let start = lineStart;
+    let end = lineEnd;
+    while (start < end && raw.charCodeAt(start) <= 32) start++;
+    while (end > start && raw.charCodeAt(end - 1) <= 32) end--;
+    lineStart = lineEnd + 1;
+    if (start >= end) continue;
+    if (nonBlankIndex++ < afterLine) continue;
+    try {
+      yield JSON.parse(raw.substring(start, end));
+    } catch {
+      // Ignore malformed or partially flushed lines without retaining all entries.
+    }
+  }
+}
+
+/** Parses entries after a nonblank-line offset without allocating a split-line array. */
 export function getNewEntries(sessionFile: string, afterLine: number): SessionEntry[] {
   if (hasNullByte(sessionFile)) return [];
   try {
-    const raw = readFileSync(sessionFile, "utf8");
-    const entries: SessionEntry[] = [];
-    let lineStart = 0;
-    let nonBlankIndex = 0;
-    const len = raw.length;
-
-    while (lineStart < len) {
-      let lineEnd = raw.indexOf("\n", lineStart);
-      if (lineEnd === -1) lineEnd = len;
-
-      let s = lineStart;
-      let e = lineEnd;
-      while (s < e && raw.charCodeAt(s) <= 32) s++;
-      while (e > s && raw.charCodeAt(e - 1) <= 32) e--;
-
-      lineStart = lineEnd + 1;
-      if (s >= e) continue; // Skip blank lines
-
-      const currentIdx = nonBlankIndex++;
-      if (currentIdx < afterLine) continue;
-
-      const line = raw.substring(s, e);
-      try {
-        entries.push(JSON.parse(line) as SessionEntry);
-      } catch {
-        // Gracefully ignore malformed JSON lines caused by concurrent writes or partial flushes.
-      }
-    }
-    return entries;
+    return [...parsedSessionLines(readFileSync(sessionFile, "utf8"), afterLine)] as SessionEntry[];
   } catch {
     return [];
   }
 }
 
-/**
- * Returns the number of non-blank, parseable JSON lines in the session file.
- * Evaluates without keeping parsed JSON objects in heap memory.
- */
+/** Counts parseable JSON lines without retaining parsed objects in memory. */
 export function countSessionEntryLines(sessionFile: string): number {
   if (hasNullByte(sessionFile)) return 0;
   try {
-    const raw = readFileSync(sessionFile, "utf8");
-    let lineStart = 0;
     let count = 0;
-    const len = raw.length;
-
-    while (lineStart < len) {
-      let lineEnd = raw.indexOf("\n", lineStart);
-      if (lineEnd === -1) lineEnd = len;
-
-      let s = lineStart;
-      let e = lineEnd;
-      while (s < e && raw.charCodeAt(s) <= 32) s++;
-      while (e > s && raw.charCodeAt(e - 1) <= 32) e--;
-
-      lineStart = lineEnd + 1;
-      if (s >= e) continue;
-
-      const line = raw.substring(s, e);
-      try {
-        JSON.parse(line);
-        count++;
-      } catch {
-        // Skip malformed lines
-      }
-    }
+    for (const _entry of parsedSessionLines(readFileSync(sessionFile, "utf8"))) count++;
     return count;
   } catch {
     return 0;
@@ -426,40 +390,8 @@ function accumulateEntryStats(entry: unknown, stats: SessionStats): void {
   }
 }
 
-/**
- * Summarizes cumulative token usage, tool call counts, context window size, and cost.
- * Performs a single-pass line scan when given a file path, or summarizes an existing
- * SessionEntry array directly without disk I/O.
- */
-export function summarizeSessionStats(sessionFileOrEntries: string | SessionEntry[]): SessionStats | null {
-  if (Array.isArray(sessionFileOrEntries)) {
-    const stats: SessionStats = {
-      model: null,
-      toolCount: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      contextTokens: 0,
-      cost: 0,
-    };
-    for (const entry of sessionFileOrEntries) {
-      accumulateEntryStats(entry, stats);
-    }
-    return stats;
-  }
-
-  const sessionFile = sessionFileOrEntries;
-  if (typeof sessionFile !== "string" || hasNullByte(sessionFile)) return null;
-
-  let raw: string;
-  try {
-    raw = readFileSync(sessionFile, "utf8");
-  } catch {
-    return null;
-  }
-
-  const stats: SessionStats = {
+function emptySessionStats(): SessionStats {
+  return {
     model: null,
     toolCount: 0,
     inputTokens: 0,
@@ -469,28 +401,26 @@ export function summarizeSessionStats(sessionFileOrEntries: string | SessionEntr
     contextTokens: 0,
     cost: 0,
   };
+}
 
-  let lineStart = 0;
-  const len = raw.length;
-  while (lineStart < len) {
-    let lineEnd = raw.indexOf("\n", lineStart);
-    if (lineEnd === -1) lineEnd = len;
-
-    let s = lineStart;
-    let e = lineEnd;
-    while (s < e && raw.charCodeAt(s) <= 32) s++;
-    while (e > s && raw.charCodeAt(e - 1) <= 32) e--;
-
-    lineStart = lineEnd + 1;
-    if (s >= e) continue;
-
+/**
+ * Summarizes cumulative token usage, tool call counts, context window size, and cost.
+ * Performs a single-pass line scan when given a file path, or summarizes an existing
+ * SessionEntry array directly without disk I/O.
+ */
+export function summarizeSessionStats(sessionFileOrEntries: string | SessionEntry[]): SessionStats | null {
+  let entries: Iterable<unknown>;
+  if (Array.isArray(sessionFileOrEntries)) {
+    entries = sessionFileOrEntries;
+  } else {
+    if (typeof sessionFileOrEntries !== "string" || hasNullByte(sessionFileOrEntries)) return null;
     try {
-      const entry = JSON.parse(raw.substring(s, e));
-      accumulateEntryStats(entry, stats);
+      entries = parsedSessionLines(readFileSync(sessionFileOrEntries, "utf8"));
     } catch {
-      // Ignore malformed lines
+      return null;
     }
   }
-
+  const stats = emptySessionStats();
+  for (const entry of entries) accumulateEntryStats(entry, stats);
   return stats;
 }

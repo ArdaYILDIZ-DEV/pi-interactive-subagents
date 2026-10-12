@@ -540,3 +540,32 @@ it("pins the parent's default cwd in both launch command and resume snapshot", a
   }, h.artifactDir, h.ctx, h.pi, h.map, h.deps);
   assert.ok(readFileSync(result.details.launchScriptFile!, "utf8").includes(`cd '${h.ctx.cwd}' &&`));
 });
+
+it("refuses a named missing profile before allocating a session or pane", async (t) => {
+  const h = fakeLaunchEnv(t);
+  await assert.rejects(launchSubagent({ agent: "iss-missing-profile", task: "inspect" }, h.ctx, h.map), /profile.*could not be loaded/i);
+  h.assertNoOrphan();
+});
+
+it("removes a watched child exactly once when session restoration fails", async (t) => {
+  const h = fakeLaunchEnv(t);
+  writeFileSync(h.child, JSON.stringify({ type: "session", version: 999, id: "future" }) + "\n");
+  writeFileSync(`${h.child}.done`, JSON.stringify({ type: "done" }));
+  let removed = 0;
+  const result = await watchSubagent({
+    id: "invalid-session", name: "test", task: "test", surface: "%iss-test",
+    sessionFile: h.child, startTime: Date.now(),
+  }, new AbortController().signal, { getPi: () => h.pi, removeRunning() { removed++; } });
+  assert.equal(result.exitCode, 1);
+  assert.match(result.errorMessage ?? "", /Unsupported session version/);
+  assert.equal(removed, 1);
+});
+
+it("skips deferred layout work after leaving the tmux environment", (t) => {
+  const h = fakeLaunchEnv(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  createSurface("layout-test");
+  delete process.env.TMUX;
+  t.mock.timers.tick(120);
+  assert.equal(readFileSync(join(h.dir, "tmux.log"), "utf8").includes("select-layout"), false);
+});

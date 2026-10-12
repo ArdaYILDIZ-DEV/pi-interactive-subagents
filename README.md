@@ -65,7 +65,9 @@ subagent_message({ name: "scout", message: "Also check the auth middleware" });
 Sub-agent processes run with full extension discovery enabled so all user and project extensions remain available. Tool permissions are configured directly via the `tools` field in each agent's frontmatter:
 
 - When `tools` is specified, `pi` is invoked with `--tools <allowlist>`, exposing only those tools to the agent.
-- When omitted, the agent has access to all available tools.
+- When omitted/empty without a spawning grant, Pi's default tools remain available. With `subagent_agents` but no requested tools, only the added orchestration/control tools are allowlisted; list the working tools explicitly.
+- A named profile that cannot be loaded is refused rather than launched with unrestricted defaults.
+- `safe_bash` is a regex danger filter, not a read-only or OS security sandbox.
 
 Spawns must name a known agent at **every** depth:
 
@@ -77,9 +79,9 @@ Spawns must name a known agent at **every** depth:
 
 | Agent | Model | Tools | Role |
 | ----- | ----- | ----- | ---- |
-| **scout** | `opencode/muse-spark-1.2-contributor-free` | `read`, `grep`, `find`, `ls`, `safe_bash` | Fast read-only codebase recon |
-| **researcher** | `opencode/muse-spark-1.2-contributor-free` | `web_search`, `fetch_content`, `get_search_content`, `source_check`, `web_fetch`, `read`, `safe_bash` | Web research, synthesized into a sourced brief |
-| **worker** | `antigravity/gemini-3.7-flash` | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `fetch_content`, `get_search_content`, `web_fetch`, `source_check`, `todo` + spawning | General implementer; may spawn `scout` and `researcher` |
+| **scout** | `antigravity/gemini-3.8-flash` | `read`, `grep`, `find`, `ls`, `safe_bash` | Fast read-only codebase recon |
+| **researcher** | `antigravity/gemini-3.8-flash` | `web_search`, `fetch_content`, `get_search_content`, `source_check`, `web_fetch`, `read`, `safe_bash` | Web research, synthesized into a sourced brief |
+| **worker** | `antigravity/gemini-3.8-flash` | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `fetch_content`, `get_search_content`, `web_fetch`, `source_check`, `todo` + spawning | General implementer; may spawn `scout` and `researcher` |
 
 All three are autonomous (`auto-exit: true`) and carry their identity in the system prompt (`system-prompt: append`).
 
@@ -125,12 +127,12 @@ You are a specialized agent that does X...
 | `description` | string | Shown in `subagents_list` |
 | `model` | string | Default model |
 | `thinking` | string | `minimal`, `low`, `medium`, or `high` |
-| `tools` | string | Tool allowlist (passed via `--tools`). Built-ins: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` plus any extension tools you have installed (e.g. `web_search`, `web_fetch`, `safe_bash`, etc.). Omit to allow all tools |
+| `tools` | string | Comma-separated `--tools` allowlist: built-ins (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`) and installed extension tools. Restricted loadouts also receive `ask_question`; see the spawning-grant exception above when omitting tools |
 | `subagent_agents` | string | Comma-separated agent names this agent may spawn. **Presence of this field grants the spawning toolset** (`subagent`, `subagent_message`, `subagents_list`) and restricts spawn targets to the list. Omit it and the agent cannot spawn at all |
 | `skills` | string | Comma-separated skill names to auto-load |
 | `system-prompt` | string | `append` or `replace`: pass the body as the child's `--append-system-prompt` / `--system-prompt`. Omit and the body is prepended to the task prompt instead |
 | `auto-exit` | boolean | Auto-shutdown when the agent run fully settles (recommended for all autonomous agents) |
-| `interactive` | boolean | Defaults to the inverse of `auto-exit`; user-driven agents stay quiet on stall pings |
+| `interactive` | boolean | Defaults to the inverse of `auto-exit`; retained in runtime metadata. It does not control shutdown or trigger stall pings |
 | `cwd` | string | Default working directory |
 | `disable-model-invocation` | boolean | Hide from `subagents_list`; still spawnable by explicit name |
 
@@ -140,8 +142,10 @@ The widget tracks each sub-agent from a runtime activity snapshot written by the
 `starting`, `active`, `waiting`, or `stalled` (no valid snapshot for too long).
 
 Status display is configured via `config.json` in the package directory. A `config.json.example`
-is provided; copy it to `config.json` to customize the widget. **If `config.json` is absent,
-the extension falls back to safe in-code defaults (`enabled: true`, `lineLimit: 4`, `stallAfterMs: 180000`)** rather than failing to load.
+is provided; copy it to `config.json` to customize status supervision. Loading prefers
+`config.json`, then `config.json.example`, then in-code defaults (`enabled: true`,
+`lineLimit: 4`, `stallAfterMs: 180000`). A structurally invalid readable configuration
+raises an error; malformed/unreadable JSON falls through to the next source.
 
 ```json
 {
@@ -157,8 +161,8 @@ the extension falls back to safe in-code defaults (`enabled: true`, `lineLimit: 
 
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
-| `status.enabled` | boolean | `true` | Show or hide the live status widget above the editor |
-| `status.lineLimit` | number | `4` | Maximum number of concurrent subagent status rows rendered |
+| `status.enabled` | boolean | `true` | Enable activity supervision and phase labels; the running-pane widget still remains when disabled |
+| `status.lineLimit` | number | `4` | Retained compatibility setting; currently all running agent rows are rendered |
 | `status.stallAfterMs` | number | `180000` | Milliseconds without activity updates before a subagent is shown as stalled |
 
 ## Requirements & Installation
@@ -237,7 +241,7 @@ tmux new -A -s pi 'pi'
 - **Collision-resistant prompt artifacts.** Task, follow-up, and system-prompt filenames include UUIDs so different names that normalize to the same slug cannot overwrite each other's instructions within one timestamp.
 - **Explicit initial lifecycle and cwd.** `auto-exit: false` is passed as an explicit child environment opt-out. New launches pin the effective cwd in both the command and resume snapshot, including when cwd defaults to the parent. Historical snapshots with `cwd: null` are not migrated by this change.
 
-- **Instant automatic pane destruction.** The child shell executes with exit trapping; upon turn completion, a `.done` sidecar triggers immediate pane teardown (`kill-pane`) so terminal splits never linger after subagents finish.
+- **Automatic pane cleanup.** The launch shell exits after Pi finishes; the parent watcher also closes tracked panes on completion or failure. Missing completion evidence is reported as an unknown failure, not success.
 - **Bi-directional `ask_question` support.** Subagents can call `ask_question` to pause and request clarification from the orchestrator. Questions are rendered into an interactive alert and can be replied to via `subagent_message`.
 - **Full extension discovery & flexible tool allowlisting.** Subagents inherit all installed Pi extensions without `--no-extensions` lockout, while tool access is governed strictly by the frontmatter `tools` field.
 - **Nested subagent spawning support.** Spawning-enabled subagents (like `worker`) inherit tmux environment variables (`TMUX`, `TMUX_PANE`) and spawning tools to seamlessly orchestrate child subagents.
@@ -247,9 +251,11 @@ tmux new -A -s pi 'pi'
 
 ## Tests
 
-Unit tests cover the dependency-free core (session parsing, the name registry, the loadout
-snapshot, status classification, the sandbox builder, the activity recorder, and the
-`safe_bash` danger matcher). They need no pi/tmux and run without installing dependencies:
+Unit tests cover session parsing, profile discovery, registries/loadouts, status, sandbox
+flags, activity, lifecycle supervision, rendering, and command filtering. The full suite
+requires the package's development dependencies, but no tmux server, credentials, or LLM
+calls. The core modules remain dependency-free; lifecycle tests use a fake tmux executable.
+From a dependency-equipped checkout:
 
 ```bash
 npm test

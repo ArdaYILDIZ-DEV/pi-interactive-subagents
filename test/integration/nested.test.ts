@@ -1,7 +1,6 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
 import {
   createTestEnv,
   cleanupTestEnv,

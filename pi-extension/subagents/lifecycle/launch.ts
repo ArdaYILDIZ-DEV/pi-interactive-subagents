@@ -108,6 +108,9 @@ export async function launchSubagent(
   const id = Math.random().toString(16).slice(2, 10);
 
   const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
+  if (params.agent && !agentDefs) {
+    throw new Error(`Subagent profile "${params.agent}" could not be loaded; refusing an unrestricted fallback.`);
+  }
   const effectiveModel = params.model ?? agentDefs?.model;
   const effectiveTools = agentDefs?.tools;
   const effectiveSkills = agentDefs?.skills;

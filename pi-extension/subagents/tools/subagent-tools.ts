@@ -216,7 +216,6 @@ export function registerSubagentTool(
 
       const parentArtifactDir = getArtifactDir(parent.sessionDir, parent.sessionId);
 
-      let reservedName: string | null = null;
       const requestedName = params.name?.trim();
       const registryNames = new Set(
         Object.keys(readNameRegistry(parentArtifactDir)),
@@ -226,7 +225,7 @@ export function registerSubagentTool(
         requestedName || params.agent,
         registryNames,
       );
-      reservedName = params.name;
+      const reservedName = params.name;
       reservedNames.add(reservedName);
 
       let running: RunningSubagent;
@@ -243,7 +242,7 @@ export function registerSubagentTool(
           },
         );
       } finally {
-        if (reservedName) reservedNames.delete(reservedName);
+        reservedNames.delete(reservedName);
       }
 
       const dispatcherDeps = {

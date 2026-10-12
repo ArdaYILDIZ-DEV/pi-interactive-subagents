@@ -327,7 +327,8 @@ You are a test agent. Always verify.`;
         errorMessage: "Rate limit exceeded",
       };
       const formattedError = resolveResultPresentation(errorRes);
-      assert.ok(formattedError.includes("provider/agent error — auto-retry exhausted"));
+      assert.ok(formattedError.includes('Sub-agent "worker" failed after 3s.'));
+      assert.ok(formattedError.includes("Partial work may exist."));
       assert.ok(formattedError.includes("Rate limit exceeded"));
     });
   });
@@ -453,4 +454,15 @@ it("does not overwrite task, resume or identity artifacts with colliding names a
   assert.notEqual(first, second);
   assert.equal(readFileSync(first, "utf8"), "first");
   assert.equal(readFileSync(second, "utf8"), "second");
+});
+
+it("does not attribute supervision failures to provider retries or promise no partial work", () => {
+  const text = resolveResultPresentation({
+    name: "worker", task: "edit", summary: "Partial changes exist", exitCode: 1,
+    elapsed: 2, errorMessage: "Subagent pane disappeared without completion evidence; exit status is unknown.",
+  });
+  assert.ok(!text.includes("provider/agent"));
+  assert.ok(!text.includes("auto-retry exhausted"));
+  assert.ok(!text.includes("did not produce a result"));
+  assert.match(text, /partial work/i);
 });

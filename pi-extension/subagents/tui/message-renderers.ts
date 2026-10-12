@@ -70,7 +70,7 @@ export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
       invalidate() {},
       render(width: number): string[] {
         const name = details.name ?? "subagent";
-        const failed = (details.exitCode ?? 0) !== 0 || !!details.errorMessage;
+        const failed = (details.exitCode ?? 0) !== 0 || !!details.errorMessage || !!details.error;
         const elapsed =
           details.elapsed == null ? "?" : formatElapsed(details.elapsed);
         const bgFn = failed
@@ -80,7 +80,7 @@ export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
         const title = `${icon} ${theme.fg("toolTitle", theme.bold(name))} ${theme.fg("dim", "—")} `;
         const toolCount = details.stats?.toolCount ?? details.toolCount ?? 0;
         const header = failed
-          ? `${title}${theme.fg("error", details.errorMessage ? "failed (provider/agent error)" : `failed (exit ${details.exitCode})`)} ${theme.fg("dim", `· ${elapsed}`)}`
+          ? `${title}${theme.fg("error", details.errorMessage || details.error ? "failed" : `failed (exit ${details.exitCode})`)} ${theme.fg("dim", `· ${elapsed}`)}`
           : `${title}${theme.fg("dim", `${toolCount} tools · ${elapsed}`)}`;
         const rawContent =
           typeof message.content === "string" ? message.content : "";

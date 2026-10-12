@@ -18,16 +18,7 @@ export function getAgentConfigDir(): string {
 }
 
 export function getBundledAgentsDir(): string {
-  const dir = join(DISCOVERY_DIR, "../../../agents");
-  try {
-    if (existsSync(dir)) return dir;
-  } catch {
-    // existsSync should not throw; fall through to stable return below.
-  }
-  // Safe fallback: return computed path unchanged. Callers already guard
-  // missing dirs (loadAgentDefaults via existsSync, discoverAgentDefinitions
-  // via readdirSafe), so a missing bundled dir yields null/[] without throwing.
-  return dir;
+  return join(DISCOVERY_DIR, "../../../agents");
 }
 
 export interface AgentDefaults {
@@ -68,8 +59,9 @@ export function getFrontmatterValue(
   frontmatter: string,
   key: string,
 ): string | undefined {
-  const match = frontmatter.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
-  return match ? match[1].trim() : undefined;
+  // Horizontal whitespace only: an empty field must not consume the next key.
+  const match = frontmatter.match(new RegExp(`^${key}:[ \\t]*([^\\r\\n]*)`, "m"));
+  return match?.[1].trim() || undefined;
 }
 
 export function parseCommaList(
@@ -110,10 +102,10 @@ export function parseAgentDefinition(
   content: string,
   fallbackName: string,
 ): AgentDefaults | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
   const frontmatter = match[1];
-  const body = content.replace(/^---\n[\s\S]*?\n---\n*/, "").trim();
+  const body = content.slice(match[0].length).trim();
   return {
     name: getFrontmatterValue(frontmatter, "name") ?? fallbackName,
     description: getFrontmatterValue(frontmatter, "description"),

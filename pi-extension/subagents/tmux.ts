@@ -79,6 +79,7 @@ function rebalanceSurfaces(hintPane?: string): void {
   if (rebalanceTimer) clearTimeout(rebalanceTimer);
   rebalanceTimer = setTimeout(() => {
     rebalanceTimer = null;
+    if (!isMuxAvailable()) return;
     try {
       execFileSync(
         "tmux",

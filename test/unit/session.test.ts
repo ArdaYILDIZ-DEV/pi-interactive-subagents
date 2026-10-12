@@ -343,3 +343,22 @@ it("does not overwrite an existing session while seeding a fresh child", (t) => 
   }), /EEXIST/);
   assert.equal(readFileSync(child, "utf8"), original);
 });
+
+it("preserves nonblank offsets, malformed-line skipping and streamed statistics", (t) => {
+  const d = tmp();
+  t.after(() => rmSync(d, { recursive: true, force: true }));
+  const file = join(d, "scanner.jsonl");
+  const records = [
+    { type: "session", id: "scanner" },
+    { ...ASSISTANT, message: { ...ASSISTANT.message, usage: { input: 4, output: 2 } } },
+  ];
+  writeFileSync(file, `\r\n \t${JSON.stringify(records[0])}\r\n\t\n broken-json{ \r\n ${JSON.stringify(records[1])}\t\r\nnull\n42`);
+  assert.deepEqual(getNewEntries(file, 0), [records[0], records[1], null, 42]);
+  assert.deepEqual(getNewEntries(file, 1), [records[1], null, 42]);
+  assert.deepEqual(getNewEntries(file, 2), [records[1], null, 42]);
+  assert.deepEqual(getNewEntries(file, 3), [null, 42]);
+  assert.equal(countSessionEntryLines(file), 4);
+  assert.deepEqual(summarizeSessionStats(file), summarizeSessionStats(records as SessionEntry[]));
+  assert.equal(summarizeSessionStats(join(d, "missing.jsonl")), null);
+  assert.equal(countSessionEntryLines(join(d, "missing.jsonl")), 0);
+});
